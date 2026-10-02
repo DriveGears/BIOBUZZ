@@ -31,9 +31,14 @@ public class NicholasAutoPrac extends LinearOpMode {
         runtime.reset();
 
         // Step 1: Drive forward for 2 seconds at 50% power
-        leftDrive.setPower(1);
-        rightDrive.setPower(0.5);
-        sleep(7500);
+        for (int i=0;i<4;i++){
+            leftDrive.setPower(1);
+            rightDrive.setPower(1);
+            sleep(3500);
+            leftDrive.setPower(-1);
+            rightDrive.setPower(1);
+            sleep(450);
+        }
 
         // Step 2: Stop the robot
         leftDrive.setPower(0);
