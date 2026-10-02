@@ -314,7 +314,7 @@ voltage was not updated on driver station if OpMode did not send any telemetry.
     configurable as Servo Hubs. If the app on either device is outdated, the Servo Hub will show up as an Expansion Hub,
     and some functionality will not work as expected. You should wait to create a configuration that includes a Servo Hub
     until both the Driver Station and Robot Controller apps have been updated to version 10.0.
-  * Updating the Servo Hub's firmware and changing its address can only be done using the REV Hardware Client at this time
+  * Updating the Servo Hub's firmware and changing its address can only be done using the REV org.firstinspires.ftc.teamcode.Hardware Client at this time
 * Adds support for the REV 9-Axis IMU (REV-31-3332)
   * The REV 9-Axis IMU is only supported by the [Universal IMU interface](https://ftc-docs.firstinspires.org/en/latest/programming_resources/imu/imu.html)
   * Adds `Rev9AxisImuOrientationOnRobot` Java class.
@@ -585,7 +585,7 @@ This is a bug fix only release to address the following four issues.
 
 ### Bug Fixes
 * Fixes accessing the "Manage TensorFlow Lite Models" and "Manage Sounds" links and performing
-  Blocks and OnBotJava OpMode downloads from the REV Hardware Client.
+  Blocks and OnBotJava OpMode downloads from the REV org.firstinspires.ftc.teamcode.Hardware Client.
 * Fixes issue where an I2C device driver would be auto-initialized using the parameters assigned in
   a previous OpMode run.
 * Improves Driver Station popup menu placement in the landscape layout.
@@ -798,7 +798,7 @@ This is a bug fix only release to address the following four issues.
   the Control Hub was not able to communicate with its internal Expansion Hub
 * Fixes certain I2C devices not showing up in the appropriate `HardwareMap` fields (such as `hardwareMap.colorSensor`)
 * Fixes issue where performing a Wi-Fi factory reset on the Control Hub would not set the Wi-Fi band to 2.4 GHz
-* Fixes issue where OnBotJava might fail to create a new file if the option to "Setup Code for Configured Hardware" was selected
+* Fixes issue where OnBotJava might fail to create a new file if the option to "Setup Code for Configured org.firstinspires.ftc.teamcode.Hardware" was selected
 * Fixes issue where performing certain operations after an OpMode crashes would temporarily break Control/Expansion Hub communication
 * Fixes issue where a Control Hub with a configured USB-connected Expansion Hub would not work if the Expansion Hub was missing at startup
 * Fixes potential issues caused by having mismatched Control/Expansion Hub firmware versions
@@ -824,7 +824,7 @@ This is a bug fix only release to address the following four issues.
     * For details and usage guide, please see [this wiki entry](https://github.com/FIRST-Tech-Challenge/FtcRobotController/wiki/Automatically-Loading-a-Driver-Controlled-Op-Mode)
 * Shows icon next to OpMode name in the OpMode list dropdown on the Driver Station to indicate the source of the OpMode (i.e. the programming tool used to create it)
 * Fixes issue where the Driver Station app would exit after displaying the Configuring Wi-Fi Direct screen
-* Fixes Blocks and OnBotJava prompts when accessed via the REV Hardware Client
+* Fixes Blocks and OnBotJava prompts when accessed via the REV org.firstinspires.ftc.teamcode.Hardware Client
 
 ## Version 6.0 (20200921-085816)
 
