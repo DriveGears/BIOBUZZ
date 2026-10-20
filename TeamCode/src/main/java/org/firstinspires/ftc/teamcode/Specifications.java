@@ -9,4 +9,7 @@ public class Specifications {
 
     public static final String OUTTAKE = "outtake";
 
+    public static final String TRANSFER = "transfer";
+    public static final String INTAKE = "intake";
+
 }

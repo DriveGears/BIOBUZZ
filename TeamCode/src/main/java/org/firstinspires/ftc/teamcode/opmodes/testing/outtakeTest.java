@@ -29,8 +29,13 @@ public class outtakeTest extends LinearOpMode {
     private static final double READY_TOLERANCE_RPM = 25.0;
     private int stableLoops = 0;
     private static final int REQUIRED_STABLE_LOOPS = 5;
+
     private boolean flywheelOn = false;
+    private boolean intakeOn = false;
+
+    private boolean transferOn = false;
     private boolean lastX = false;
+    private boolean lastB = false;
     private boolean lastDpadUp = false;
     private boolean lastDpadDown = false;
     private boolean lastDpadLeft = false;
@@ -42,9 +47,23 @@ public class outtakeTest extends LinearOpMode {
     public void runOpMode() {
         Hardware robot = Hardware.getInstance(hardwareMap);
         DcMotorEx flywheel = robot.outtake;
+        DcMotorEx intake = robot.intake;
+        DcMotorEx transfer = robot.transfer;
 
-        flywheel.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
-        flywheel.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.FLOAT);
+        if (flywheel != null) {
+            flywheel.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
+            flywheel.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
+        }
+
+        if (intake != null) {
+            intake.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
+            intake.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
+        }
+
+        if (transfer != null) {
+            transfer.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
+            transfer.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
+        }
 
         telemetry.addData("Status", "Ready!");
         telemetry.update();
@@ -94,6 +113,13 @@ public class outtakeTest extends LinearOpMode {
             }
             lastX = currentX;
 
+            boolean currentB = gamepad1.b;
+            if (currentB && !lastB) {
+                intakeOn = !intakeOn; // B = ON / OFF
+                transferOn = !transferOn;
+            }
+            lastB = currentB;
+
             boolean shoot = flywheelOn;
 
             double targetTPS = shoot ? (targetRPM * TICKS_PER_REV / 60.0) : 0.0;
@@ -123,7 +149,17 @@ public class outtakeTest extends LinearOpMode {
 
             lastError = errorTPS;
 
-            flywheel.setPower(motorPower);
+            if (flywheel != null) {
+                flywheel.setPower(motorPower);
+            }
+
+            if (intake != null) {
+                intake.setPower(intakeOn ? 1.0 : 0.0);
+            }
+
+            if (transfer != null) {
+                transfer.setPower(transferOn ? 1.0 : 0.0);
+            }
 
             boolean isAtSpeed = shoot && (Math.abs(errorRPM) <= READY_TOLERANCE_RPM);
             if (isAtSpeed) {
@@ -134,6 +170,7 @@ public class outtakeTest extends LinearOpMode {
             boolean readyToShoot = stableLoops >= REQUIRED_STABLE_LOOPS;
 
             telemetry.addData("Flywheel Toggle (X)", flywheelOn ? "ON (Running)" : "OFF (Stopped)");
+            telemetry.addData("Intake & Transfer Toggle (B)", intakeOn ? "ON (Running)" : "OFF (Stopped)");
             telemetry.addData("Flywheel Status", shoot
                     ? (readyToShoot ? "*** READY TO SHOOT ***" : "SPINNING UP (PID Control)")
                     : "STOPPED");
@@ -147,13 +184,22 @@ public class outtakeTest extends LinearOpMode {
             telemetry.addLine();
             telemetry.addLine("=== CONTROLS ===");
             telemetry.addLine("X Button: Toggle Flywheel ON / OFF");
+            telemetry.addLine("B Button: Toggle Intake ON / OFF");
             telemetry.addLine("D-Pad Up/Down: Small Adjust Target (+/- 50 RPM)");
-            telemetry.addLine("D-Pad Right/Left: Large Adjust Target (+/- 250 RPM)");
+            telemetry.addLine("D-Pad Right/Left: Gamepad Left/Right");
 
             telemetry.update();
         }
 
-        flywheel.setPower(0);
+        if (flywheel != null) {
+            flywheel.setPower(0);
+        }
+        if (intake != null) {
+            intake.setPower(0);
+        }
+        if (transfer != null) {
+            transfer.setPower(0);
+        }
     }
 
     private void resetPID() {
