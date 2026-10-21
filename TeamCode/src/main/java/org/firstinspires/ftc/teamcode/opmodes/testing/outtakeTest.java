@@ -13,7 +13,10 @@ public class outtakeTest extends LinearOpMode {
 
     private static final double TICKS_PER_REV = 28.0;
 
-    private double targetRPM = 400.0; // Default target RPM
+    private double targetFlywheelRPM = 400.0; // Default RPM for outtake
+    private double targetTransferRPM = 300.0; // Default RPM for transfer
+    private boolean adjustingTransfer = false; // Toggle between outtake vs transfer w A button
+
     private static final double RPM_STEP_FINE = 50.0;    // D-Pad Up / Down (+/- 50 RPM)
     private static final double RPM_STEP_COARSE = 250.0; // D-Pad Right / Left (+/- 250 RPM)
 
@@ -21,9 +24,11 @@ public class outtakeTest extends LinearOpMode {
     private static final double KI = 0.0005;
     private static final double KD = 0.0001;
     private static final double KF = 0.000435;
-
     private double integralSum = 0.0;
     private double lastError = 0.0;
+    private double transferIntegralSum = 0.0;
+    private double transferLastError = 0.0;
+
     private static final double MAX_INTEGRAL_SUM = 200.0;
 
     private static final double READY_TOLERANCE_RPM = 25.0;
@@ -32,10 +37,11 @@ public class outtakeTest extends LinearOpMode {
 
     private boolean flywheelOn = false;
     private boolean intakeOn = false;
-
     private boolean transferOn = false;
+
     private boolean lastX = false;
-    private boolean lastB = false;
+    private boolean lastY = false;
+    private boolean lastA = false;
     private boolean lastDpadUp = false;
     private boolean lastDpadDown = false;
     private boolean lastDpadLeft = false;
@@ -83,20 +89,43 @@ public class outtakeTest extends LinearOpMode {
             boolean currentDpadLeft = gamepad1.dpad_left;
             boolean currentDpadRight = gamepad1.dpad_right;
 
+            // Toggle between Outtake and Transfer using A
+            boolean currentA = gamepad1.a;
+            if (currentA && !lastA) {
+                adjustingTransfer = !adjustingTransfer;
+            }
+            lastA = currentA;
+
             // Small RPM adjustments: D-Pad Up / Down (+/- 50 RPM)
             if (currentDpadUp && !lastDpadUp) {
-                targetRPM += RPM_STEP_FINE;
+                if (adjustingTransfer) {
+                    targetTransferRPM += RPM_STEP_FINE;
+                } else {
+                    targetFlywheelRPM += RPM_STEP_FINE;
+                }
             }
             if (currentDpadDown && !lastDpadDown) {
-                targetRPM = Math.max(0, targetRPM - RPM_STEP_FINE);
+                if (adjustingTransfer) {
+                    targetTransferRPM = Math.max(0, targetTransferRPM - RPM_STEP_FINE);
+                } else {
+                    targetFlywheelRPM = Math.max(0, targetFlywheelRPM - RPM_STEP_FINE);
+                }
             }
 
             // Large RPM adjustments: D-Pad Right / Left (+/- 250 RPM)
             if (currentDpadRight && !lastDpadRight) {
-                targetRPM += RPM_STEP_COARSE;
+                if (adjustingTransfer) {
+                    targetTransferRPM += RPM_STEP_COARSE;
+                } else {
+                    targetFlywheelRPM += RPM_STEP_COARSE;
+                }
             }
             if (currentDpadLeft && !lastDpadLeft) {
-                targetRPM = Math.max(0, targetRPM - RPM_STEP_COARSE);
+                if (adjustingTransfer) {
+                    targetTransferRPM = Math.max(0, targetTransferRPM - RPM_STEP_COARSE);
+                } else {
+                    targetFlywheelRPM = Math.max(0, targetFlywheelRPM - RPM_STEP_COARSE);
+                }
             }
 
             lastDpadUp = currentDpadUp;
@@ -106,30 +135,34 @@ public class outtakeTest extends LinearOpMode {
 
             boolean currentX = gamepad1.x;
             if (currentX && !lastX) {
-                flywheelOn = !flywheelOn; // X = ON / OFF
+                flywheelOn = !flywheelOn; // X = Flywheel ON / OFF
                 if (!flywheelOn) {
                     resetPID();
                 }
             }
             lastX = currentX;
 
-            boolean currentB = gamepad1.b;
-            if (currentB && !lastB) {
-                intakeOn = !intakeOn; // B = ON / OFF
-                transferOn = !transferOn;
+            boolean currentY = gamepad1.y;
+            if (currentY && !lastY) {
+                intakeOn = !intakeOn;     // Y = Intake ON / OFF
+                transferOn = !transferOn; // Y = Transfer ON / OFF
+                if (!transferOn) {
+                    resetTransferPID();
+                }
             }
-            lastB = currentB;
+            lastY = currentY;
 
             boolean shoot = flywheelOn;
+            boolean transferRun = transferOn;
 
-            double targetTPS = shoot ? (targetRPM * TICKS_PER_REV / 60.0) : 0.0;
+            // Outtake Flywheel PIDF Control
+            double targetTPS = shoot ? (targetFlywheelRPM * TICKS_PER_REV / 60.0) : 0.0;
             double actualTPS = (flywheel != null) ? flywheel.getVelocity() : 0.0;
             double actualRPM = (actualTPS * 60.0) / TICKS_PER_REV;
             double errorTPS = targetTPS - actualTPS;
-            double errorRPM = shoot ? (targetRPM - actualRPM) : 0.0;
+            double errorRPM = shoot ? (targetFlywheelRPM - actualRPM) : 0.0;
 
             double motorPower = 0.0;
-
             if (shoot) {
                 double pTerm = KP * errorTPS;
                 integralSum += errorTPS * dt;
@@ -146,8 +179,33 @@ public class outtakeTest extends LinearOpMode {
             } else {
                 resetPID();
             }
-
             lastError = errorTPS;
+
+            // Transfer Motor PIDF Control
+            double targetTransferTPS = transferRun ? (targetTransferRPM * TICKS_PER_REV / 60.0) : 0.0;
+            double actualTransferTPS = (transfer != null) ? transfer.getVelocity() : 0.0;
+            double actualTransferRPM = (actualTransferTPS * 60.0) / TICKS_PER_REV;
+            double errorTransferTPS = targetTransferTPS - actualTransferTPS;
+            double errorTransferRPM = transferRun ? (targetTransferRPM - actualTransferRPM) : 0.0;
+
+            double transferMotorPower = 0.0;
+            if (transferRun) {
+                double pTermT = KP * errorTransferTPS;
+                transferIntegralSum += errorTransferTPS * dt;
+                transferIntegralSum = Math.max(-MAX_INTEGRAL_SUM, Math.min(MAX_INTEGRAL_SUM, transferIntegralSum));
+                double iTermT = KI * transferIntegralSum;
+
+                double derivativeT = (errorTransferTPS - transferLastError) / dt;
+                double dTermT = KD * derivativeT;
+
+                double fTermT = KF * targetTransferTPS;
+
+                transferMotorPower = pTermT + iTermT + dTermT + fTermT;
+                transferMotorPower = Math.max(-1.0, Math.min(1.0, transferMotorPower));
+            } else {
+                resetTransferPID();
+            }
+            transferLastError = errorTransferTPS;
 
             if (flywheel != null) {
                 flywheel.setPower(motorPower);
@@ -158,7 +216,7 @@ public class outtakeTest extends LinearOpMode {
             }
 
             if (transfer != null) {
-                transfer.setPower(transferOn ? 1.0 : 0.0);
+                transfer.setPower(transferMotorPower);
             }
 
             boolean isAtSpeed = shoot && (Math.abs(errorRPM) <= READY_TOLERANCE_RPM);
@@ -169,24 +227,32 @@ public class outtakeTest extends LinearOpMode {
             }
             boolean readyToShoot = stableLoops >= REQUIRED_STABLE_LOOPS;
 
+            telemetry.addData("Tuning Focus (A)", adjustingTransfer ? "--> TRANSFER RPM" : "--> OUTTAKE (Flywheel) RPM");
             telemetry.addData("Flywheel Toggle (X)", flywheelOn ? "ON (Running)" : "OFF (Stopped)");
-            telemetry.addData("Intake & Transfer Toggle (B)", intakeOn ? "ON (Running)" : "OFF (Stopped)");
+            telemetry.addData("Intake & Transfer Toggle (Y)", intakeOn ? "ON (Running)" : "OFF (Stopped)");
             telemetry.addData("Flywheel Status", shoot
                     ? (readyToShoot ? "*** READY TO SHOOT ***" : "SPINNING UP (PID Control)")
                     : "STOPPED");
 
             telemetry.addLine();
-            telemetry.addData("Target RPM", "%.0f RPM (%.1f TPS)", targetRPM, targetTPS);
-            telemetry.addData("Actual RPM", "%.0f RPM (%.1f TPS)", actualRPM, actualTPS);
-            telemetry.addData("RPM Error", "%.0f RPM", errorRPM);
-            telemetry.addData("PID Motor Power", "%.1f%%", motorPower * 100.0);
+            telemetry.addData("Outtake Target RPM", "%.0f RPM (%.1f TPS)", targetFlywheelRPM, targetTPS);
+            telemetry.addData("Outtake Actual RPM", "%.0f RPM (%.1f TPS)", actualRPM, actualTPS);
+            telemetry.addData("Outtake RPM Error", "%.0f RPM", errorRPM);
+            telemetry.addData("Outtake Power", "%.1f%%", motorPower * 100.0);
+
+            telemetry.addLine();
+            telemetry.addData("Transfer Target RPM", "%.0f RPM (%.1f TPS)", targetTransferRPM, targetTransferTPS);
+            telemetry.addData("Transfer Actual RPM", "%.0f RPM (%.1f TPS)", actualTransferRPM, actualTransferTPS);
+            telemetry.addData("Transfer RPM Error", "%.0f RPM", errorTransferRPM);
+            telemetry.addData("Transfer Power", "%.1f%%", transferMotorPower * 100.0);
 
             telemetry.addLine();
             telemetry.addLine("=== CONTROLS ===");
             telemetry.addLine("X Button: Toggle Flywheel ON / OFF");
-            telemetry.addLine("B Button: Toggle Intake ON / OFF");
+            telemetry.addLine("Y Button: Toggle Intake & Transfer ON / OFF");
+            telemetry.addLine("A Button: Switch D-Pad Tuning Target (Outtake vs Transfer)");
             telemetry.addLine("D-Pad Up/Down: Small Adjust Target (+/- 50 RPM)");
-            telemetry.addLine("D-Pad Right/Left: Gamepad Left/Right");
+            telemetry.addLine("D-Pad Right/Left: Large Adjust Target (+/- 250 RPM)");
 
             telemetry.update();
         }
@@ -205,5 +271,10 @@ public class outtakeTest extends LinearOpMode {
     private void resetPID() {
         integralSum = 0.0;
         lastError = 0.0;
+    }
+
+    private void resetTransferPID() {
+        transferIntegralSum = 0.0;
+        transferLastError = 0.0;
     }
 }
