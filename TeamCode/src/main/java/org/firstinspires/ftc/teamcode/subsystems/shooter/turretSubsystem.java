@@ -27,7 +27,7 @@ public class turretSubsystem {
      * Enter this season's four tag IDs. Empty accepts every AprilTag for initial testing.
      * Example: {1, 2, 3, 4}.
      */
-    public static final int[] TARGET_TAG_IDS = {42, 43, 44, 45};
+    public static final int[] TARGET_TAG_IDS = {38, 39, 40, 41};
 
     /** Per-tag horizontal corrections, in the same order. Positive moves the aim point left. */
     public static final double[] TAG_AIM_OFFSETS_DEG = {};
@@ -39,15 +39,15 @@ public class turretSubsystem {
     public static final double TICKS_PER_DEGREE = 2.04;
 
     /** Flip this sign if the turret corrects away from the target. */
-    public static final double AIM_DIRECTION_SIGN = -1.0;
+    public static final double AIM_DIRECTION_SIGN = 1.0;
 
     /** Flip this sign if motor power and encoder tick direction disagree. */
     public static final double MOTOR_DIRECTION_SIGN = 1.0;
 
     /** Encoder safety limits; encoder zero must be the physical center. */
-    public static final int MIN_TURRET_TICKS = -135;
-    public static final int MAX_TURRET_TICKS = 135;
-    public static final double MAX_TURRET_POWER = 0.55;
+    public static final int MIN_TURRET_TICKS = -300;
+    public static final int MAX_TURRET_TICKS = 300;
+    public static final double MAX_TURRET_POWER = 0.5;
 
     /** Camera geometry for calculating horizontal floor distance. */
     public static final double CAMERA_HEIGHT_IN = 48.0;
@@ -56,11 +56,11 @@ public class turretSubsystem {
 
     /** Encoder controller: tune P first, D second, I last. */
     public static final double POSITION_KP = 0.045;
-    public static final double VELOCITY_KD = 0.0035;
-    public static final double VELOCITY_KV = 0.0015;
-    public static final double POSITION_KI = 0.015;
+    public static final double VELOCITY_KD = 0.0;
+    public static final double VELOCITY_KV = 0.0;
+    public static final double POSITION_KI = 0.0;
     public static final double MAX_INTEGRAL_POWER = 0.10;
-    public static final double STICTION_POWER = 0.050;
+    public static final double STICTION_POWER = 0.0;
 
     /** Smaller is smoother; larger reacts faster to each new camera measurement. */
     public static final double VISION_CORRECTION_GAIN = 0.18;
@@ -68,7 +68,7 @@ public class turretSubsystem {
     public static final int AIM_STABLE_FRAMES = 3;
 
     /** Motion prediction: tune flight time after basic stationary aiming works. */
-    public static final boolean PREDICTION_ENABLED = true;
+    public static final boolean PREDICTION_ENABLED = false;
     public static final double FIXED_FLIGHT_TIME_S = 0.12;
     public static final double TOF_PER_INCH_S = 0.0055;
     public static final double FIXED_SHOT_DELAY_S = 0.06;

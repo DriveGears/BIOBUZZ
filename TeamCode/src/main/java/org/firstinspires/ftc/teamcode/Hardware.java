@@ -33,7 +33,7 @@ public class Hardware {
         turret.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
         turret.setPower(0);
 
-        flywheel = hwMap.get(DcMotorEx.class, Specifications.FLYWHEEL);
+        flywheel = hwMap.get(DcMotorEx.class, Specifications.OUTTAKE);
         flywheel.setDirection(DcMotor.Direction.FORWARD);
         flywheel.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.FLOAT);
         flywheel.setMode(DcMotor.RunMode.STOP_AND_RESET_ENCODER);

@@ -19,7 +19,7 @@ public class biobuzzTeleOp extends LinearOpMode {
     private static final double STRAFE_MULTIPLIER = 1.10;
 
     /** Manual turret power available on gamepad 1's D-pad left/right. */
-    private static final double MANUAL_TURRET_POWER = 0.25;
+    private static final double MANUAL_TURRET_POWER = 0.5;
 
     /** RPM added/subtracted by each D-pad up/down press in manual RPM tuning mode. */
     private static final double RPM_TUNING_STEP = 25.0;
