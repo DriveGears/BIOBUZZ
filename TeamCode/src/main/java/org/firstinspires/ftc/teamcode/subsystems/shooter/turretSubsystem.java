@@ -27,7 +27,7 @@ public class turretSubsystem {
      * Enter this season's four tag IDs. Empty accepts every AprilTag for initial testing.
      * Example: {1, 2, 3, 4}.
      */
-    public static final int[] TARGET_TAG_IDS = {38, 39, 40, 41};
+    public static final int[] TARGET_TAG_IDS = {42, 43, 44, 45};
 
     /** Per-tag horizontal corrections, in the same order. Positive moves the aim point left. */
     public static final double[] TAG_AIM_OFFSETS_DEG = {};
@@ -36,7 +36,7 @@ public class turretSubsystem {
     public static final double[] TAG_HEIGHTS_IN = {};
 
     /** Measure encoder ticks for a known turret turn, then divide ticks by degrees. */
-    public static final double TICKS_PER_DEGREE = 2.04;
+    public static final double TICKS_PER_DEGREE = 1.81;
 
     /** Flip this sign if the turret corrects away from the target. */
     public static final double AIM_DIRECTION_SIGN = 1.0;
@@ -45,8 +45,8 @@ public class turretSubsystem {
     public static final double MOTOR_DIRECTION_SIGN = 1.0;
 
     /** Encoder safety limits; encoder zero must be the physical center. */
-    public static final int MIN_TURRET_TICKS = -300;
-    public static final int MAX_TURRET_TICKS = 300;
+    public static final int MIN_TURRET_TICKS = -155;
+    public static final int MAX_TURRET_TICKS = 155;
     public static final double MAX_TURRET_POWER = 0.5;
 
     /** Camera geometry for calculating horizontal floor distance. */
