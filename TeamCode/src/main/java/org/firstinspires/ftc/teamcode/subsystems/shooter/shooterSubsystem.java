@@ -21,10 +21,10 @@ public class shooterSubsystem {
 
     /** Distances and RPMs are paired. Measure new values for this year's mechanism. */
     public static final double[] SHOT_DISTANCE_IN = {
-            38, 40, 42, 58, 60, 82, 90, 92, 98, 120, 132
+            68
     };
     public static final double[] SHOT_RPM = {
-            1500, 1500, 1565, 1810, 1855, 2070, 2170, 2185, 2280, 2615, 2680
+            1000
     };
 
     /** SDK velocity PIDF gains. Re-tune these if the flywheel motor/gearing changed. */
