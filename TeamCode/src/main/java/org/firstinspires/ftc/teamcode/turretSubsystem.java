@@ -32,7 +32,7 @@ public class turretSubsystem extends LinearOpMode {
     Limelight3A limelight;
 
     static final int APRILTAG_PIPELINE_INDEX = 1;
-    static final int[] TARGET_TAG_IDS = {42, 43, 44, 45};
+    static final int[] TARGET_TAG_IDS = {42,45};
 
     static final long MAX_RESULT_STALENESS_MS = 120;
 
@@ -51,13 +51,13 @@ public class turretSubsystem extends LinearOpMode {
 
     // ---------------- Cascade pan control ----------------
     static final double PAN_TICKS_PER_DEG = 2.04;
-    static final double PAN_OUTER_CORRECTION_GAIN = 0.10;
+    static final double PAN_OUTER_CORRECTION_GAIN = 0.05;
     static final double PAN_TICK_SIGN = 1.0;
 
     // Inner loop
     static final double PAN_INNER_KP = 0.025;
     static final double PAN_INNER_KD = 0.0050;
-    static final double PAN_INNER_KV = 0.0015;
+    static final double PAN_INNER_KV = 0.0005;
     static final double PAN_INNER_KI = 0.005;
     static final double PAN_INNER_MAX_I = 0.05;
     double panInnerIntegral = 0;
@@ -70,7 +70,7 @@ public class turretSubsystem extends LinearOpMode {
     boolean lastXButton = false;
 
     // ---------------- Latency compensation ----------------
-    static final boolean LATENCY_COMP_ENABLED = true;
+    static final boolean LATENCY_COMP_ENABLED = false;
     static final double PAN_DEGREES_PER_TICK = 0.490;
     static final double PAN_LATENCY_SIGN = -1.0;
     static final double PAN_LATENCY_FUDGE_MS = 10.0;
@@ -153,6 +153,9 @@ public class turretSubsystem extends LinearOpMode {
     double filteredDistanceIn = 0;
     boolean distanceFilterInitialized = false;
 
+    double filteredPanMotorVelocity = 0;
+    static final double VELOCITY_EMA_ALPHA = 0.3;
+
     // Rolling screen buffer
     static final int SCREEN_CSV_LINES = 4;
     final Deque<String> liveCsvLines = new ArrayDeque<>();
@@ -206,6 +209,23 @@ public class turretSubsystem extends LinearOpMode {
                 for (LynxModule hub : allHubs) {
                     hub.clearBulkCache();
                 }
+
+                // Mecanum drive using gamepad1 sticks
+                double driveY = -gamepad1.left_stick_y;
+                double driveX = gamepad1.left_stick_x;
+                double driveRx = gamepad1.right_stick_x;
+
+                double denominator = Math.max(Math.abs(driveY) + Math.abs(driveX) + Math.abs(driveRx), 1);
+                double frontLeftPower = (driveY + driveX + driveRx) / denominator;
+                double backLeftPower = (driveY - driveX + driveRx) / denominator;
+                double frontRightPower = (driveY - driveX - driveRx) / denominator;
+                double backRightPower = (driveY + driveX - driveRx) / denominator;
+
+                robot.lf.setPower(frontLeftPower);
+                robot.lb.setPower(backLeftPower);
+                robot.rf.setPower(frontRightPower);
+                robot.rb.setPower(backRightPower);
+
                 double dtS = loopTimer.seconds();
                 loopTimer.reset();
                 double dtMs = dtS * 1000.0;
@@ -288,7 +308,9 @@ public class turretSubsystem extends LinearOpMode {
                 double appliedPanPower = 0;
 
                 int currentPanTicks = turret.getCurrentPosition();
-                double panMotorVelocity = turret.getVelocity();
+                double rawVelocity = turret.getVelocity();
+                filteredPanMotorVelocity = VELOCITY_EMA_ALPHA * rawVelocity + (1.0 - VELOCITY_EMA_ALPHA) * filteredPanMotorVelocity;
+                double panMotorVelocity = filteredPanMotorVelocity;
 
                 panTickHistory.addLast(new double[]{nowMs, currentPanTicks});
                 while (!panTickHistory.isEmpty()
@@ -477,6 +499,10 @@ public class turretSubsystem extends LinearOpMode {
                             + PAN_INNER_KD * velError
                             + panInnerIntegral
                             + stiction;
+
+                    // Scale power down when close to target for smooth micro-adjustments
+                    double proximityScale = clamp(Math.abs(tickError) / 25.0, 0.25, 1.0);
+                    innerPower *= proximityScale;
 
                     innerPower *= PAN_TICK_SIGN;
                 }
