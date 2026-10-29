@@ -34,7 +34,7 @@ public class Hardware {
         lb.setDirection(DcMotorEx.Direction.REVERSE);
         rf.setDirection(DcMotorEx.Direction.FORWARD);
         rb.setDirection(DcMotorEx.Direction.FORWARD);
-        outtake.setDirection(DcMotorEx.Direction.FORWARD);
+        outtake.setDirection(DcMotorEx.Direction.REVERSE);
         intake.setDirection(DcMotorEx.Direction.REVERSE);
         transfer.setDirection(DcMotorEx.Direction.REVERSE);
         turret.setDirection(DcMotorEx.Direction.FORWARD);
