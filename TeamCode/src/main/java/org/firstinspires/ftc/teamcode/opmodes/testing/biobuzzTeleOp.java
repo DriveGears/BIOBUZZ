@@ -28,13 +28,17 @@ public class biobuzzTeleOp extends LinearOpMode {
             double rawHeading = mecanumCommand.getOdoHeading();
             if (Double.isNaN(rawHeading)) rawHeading = 0;
 
-            double inputY = gamepad1.left_stick_y;
-            double inputX =  gamepad1.left_stick_x;
-            double inputR =  gamepad1.right_stick_x;
+            double inputY = -applyDeadband(gamepad1.left_stick_y);
+            double inputX = applyDeadband(gamepad1.left_stick_x);
+            double inputR = applyDeadband(gamepad1.right_stick_x);
 
             theta = mecanumCommand.normalMove(inputY, inputX, inputR);
         }
 
+    }
+
+    private double applyDeadband(double value) {
+        return Math.abs(value) < 0.05 ? 0 : value;
     }
 
     private void teleopAcknowledgeReset(Hardware robot) {

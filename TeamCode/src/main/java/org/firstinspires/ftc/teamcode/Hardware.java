@@ -37,9 +37,13 @@ public class Hardware {
         intake.setDirection(DcMotorEx.Direction.REVERSE);
         transfer.setDirection(DcMotorEx.Direction.REVERSE);
 
-        outtake.setZeroPowerBehavior(DcMotorEx.ZeroPowerBehavior.BRAKE);
-        intake.setZeroPowerBehavior(DcMotorEx.ZeroPowerBehavior.BRAKE);
-        transfer.setZeroPowerBehavior(DcMotorEx.ZeroPowerBehavior.BRAKE);
+        outtake.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
+        intake.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
+        transfer.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
+        rf.setZeroPowerBehavior(DcMotorEx.ZeroPowerBehavior.BRAKE);
+        lf.setZeroPowerBehavior(DcMotorEx.ZeroPowerBehavior.BRAKE);
+        lb.setZeroPowerBehavior(DcMotorEx.ZeroPowerBehavior.BRAKE);
+        rb.setZeroPowerBehavior(DcMotorEx.ZeroPowerBehavior.BRAKE);
     }
 
     public static Hardware getInstance(HardwareMap hwMap) {
