@@ -32,7 +32,7 @@ public class turretSubsystem extends LinearOpMode {
     Limelight3A limelight;
 
     static final int APRILTAG_PIPELINE_INDEX = 1;
-    static final int[] TARGET_TAG_IDS = {42,45};
+    static final int[] TARGET_TAG_IDS = {42, 43, 44, 45}; //TRY ALSO W/ ONLY 42 & 45 AS TARGET TAGS (outer tags, visible at all times without beam or visibility blockage)
 
     static final long MAX_RESULT_STALENESS_MS = 120;
 
@@ -425,15 +425,15 @@ public class turretSubsystem extends LinearOpMode {
                     aimReady = Math.abs(panErrorDeg) <= PAN_DEADBAND_DEG;
 
                     if (consecutiveGoodFrames >= PAN_REACQUIRE_FRAMES) {
-                        double impliedTargetTicks = currentPanTicks
+                        double instantaneousTargetTicks = currentPanTicks
                                 + panDirectionOverride * panErrorDeg * PAN_TICKS_PER_DEG;
 
                         if (!panSetpointInitialized) {
-                            panSetpointTicks = impliedTargetTicks;
+                            panSetpointTicks = instantaneousTargetTicks;
                             panSetpointInitialized = true;
                         } else {
-                            panSetpointTicks += PAN_OUTER_CORRECTION_GAIN
-                                    * (impliedTargetTicks - panSetpointTicks);
+                            panSetpointTicks = (1.0 - PAN_OUTER_CORRECTION_GAIN) * panSetpointTicks
+                                    + PAN_OUTER_CORRECTION_GAIN * instantaneousTargetTicks;
                         }
                     }
 

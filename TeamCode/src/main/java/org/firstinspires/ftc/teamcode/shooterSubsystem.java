@@ -2,9 +2,7 @@ package org.firstinspires.ftc.teamcode;
 
 import com.qualcomm.robotcore.hardware.DcMotor;
 
-import org.firstinspires.ftc.teamcode.Hardware;
-
-/** Controls flywheel RPM and runs the intake and transfer together with the shooter. */
+/** Controls OUTTAKE RPM using software PIDF in RUN_WITHOUT_ENCODER mode and runs intake/transfer. */
 public class shooterSubsystem {
 
     // ========================= VALUES TO CALIBRATE =========================
@@ -12,8 +10,8 @@ public class shooterSubsystem {
     /** Encoder ticks per motor revolution. Common bare goBILDA/REV encoder value is 28. */
     public static final double MOTOR_TICKS_PER_REVOLUTION = 28.0;
 
-    /** Motor revolutions per flywheel revolution. Use 1.0 for a direct drive. */
-    public static final double MOTOR_REVS_PER_FLYWHEEL_REV = 1.0;
+    /** Motor revolutions per OUTTAKE revolution. Use 1.0 for a direct drive. */
+    public static final double MOTOR_REVS_PER_OUTTAKE_REV = 1.0;
 
     /** Change either sign if an intake mechanism runs backward. */
     public static final double INTAKE_POWER = 1.0;
@@ -27,16 +25,17 @@ public class shooterSubsystem {
             1500, 1500, 1565, 1810, 1855, 2070, 2170, 2185, 2280, 2615, 2680
     };
 
-    /** SDK velocity PIDF gains. Re-tune these if the flywheel motor/gearing changed. */
-    public static final double FLYWHEEL_P = 10.0;
-    public static final double FLYWHEEL_I = 0.08;
-    public static final double FLYWHEEL_D = 2.0;
-    public static final double FLYWHEEL_F = 14.0;
+    // Software PIDF Gains (RUN_WITHOUT_ENCODER motor mode)
+    private static final double KP = 0.0020;
+    private static final double KI = 0.0005;
+    private static final double KD = 0.0001;
+    private static final double KF = 0.000435;
+    private static final double MAX_INTEGRAL_SUM = 200.0;
 
     /** Maximum allowed request and how quickly the commanded RPM may change. */
     public static final double MAX_RPM = 3400.0;
-    public static final double SPIN_UP_RPM_PER_SECOND = 10700.0;
-    public static final double SPIN_DOWN_RPM_PER_SECOND = 860.0;
+    public static final double SPIN_UP_RPM_PER_SECOND = 15000.0;
+    public static final double SPIN_DOWN_RPM_PER_SECOND = 10000.0;
 
     /** Ready requires this RPM accuracy for READY_STABLE_LOOPS consecutive loops. */
     public static final double READY_TOLERANCE_RPM = 32.0;
@@ -56,15 +55,16 @@ public class shooterSubsystem {
     private int readyLoops;
     private boolean atSpeed;
 
+    private double integralSum = 0.0;
+    private double lastError = 0.0;
+
     public shooterSubsystem(Hardware robot) {
         if (SHOT_DISTANCE_IN.length != SHOT_RPM.length || SHOT_DISTANCE_IN.length == 0) {
             throw new IllegalStateException("SHOT_DISTANCE_IN and SHOT_RPM must have equal lengths");
         }
 
         this.robot = robot;
-        robot.outtake.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
-        robot.outtake.setVelocityPIDFCoefficients(
-                FLYWHEEL_P, FLYWHEEL_I, FLYWHEEL_D, FLYWHEEL_F);
+        robot.outtake.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
         stopMotors();
     }
 
@@ -77,7 +77,8 @@ public class shooterSubsystem {
             commandedRpm = 0;
             readyLoops = 0;
             atSpeed = false;
-            robot.outtake.setVelocity(0);
+            robot.outtake.setPower(0);
+            resetPID();
         }
     }
 
@@ -128,28 +129,26 @@ public class shooterSubsystem {
         double maxChange = slewRate * dt;
         commandedRpm += clamp(targetRpm - commandedRpm, -maxChange, maxChange);
 
+        double targetTPS = rpmToTicksPerSecond(commandedRpm);
+        double actualTPS = robot.outtake.getVelocity();
+        double errorTPS = targetTPS - actualTPS;
+
+        double pTerm = KP * errorTPS;
+        integralSum += errorTPS * dt;
+        integralSum = Math.max(-MAX_INTEGRAL_SUM, Math.min(MAX_INTEGRAL_SUM, integralSum));
+        double iTerm = KI * integralSum;
+
+        double derivative = (errorTPS - lastError) / dt;
+        double dTerm = KD * derivative;
+
+        double fTerm = KF * targetTPS;
+
+        double motorPower = pTerm + iTerm + dTerm + fTerm;
+        motorPower = clamp(motorPower, -1.0, 1.0);
+        robot.outtake.setPower(motorPower);
+        lastError = errorTPS;
+
         double actualRpm = getActualRpm();
-        robot.outtake.setVelocity(rpmToTicksPerSecond(commandedRpm));
-
-        /*
-         * OPTIONAL OPEN-LOOP BOOST FROM THE OLD ROBOT (currently disabled)
-         *
-         * The old code temporarily switched to RUN_WITHOUT_ENCODER and full power whenever the
-         * flywheel was far below its target. Keep normal setVelocity() control until testing proves
-         * boost is necessary. To restore it, replace the setVelocity() line above with this logic:
-         *
-         * double rpmGap = targetRpm - actualRpm;
-         * if (rpmGap > 320 && targetRpm > 110) {
-         *     robot.flywheel.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
-         *     robot.flywheel.setPower(1.0);
-         * } else {
-         *     robot.flywheel.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
-         *     robot.flywheel.setVelocity(rpmToTicksPerSecond(commandedRpm));
-         * }
-         *
-         * Add hysteresis before competition use so it does not switch modes every loop near 320 RPM.
-         */
-
         if (Math.abs(actualRpm - targetRpm) <= READY_TOLERANCE_RPM) {
             readyLoops++;
         } else {
@@ -184,19 +183,25 @@ public class shooterSubsystem {
     }
 
     private void stopMotors() {
-        robot.outtake.setVelocity(0);
+        robot.outtake.setPower(0);
         robot.intake.setPower(0);
         robot.transfer.setPower(0);
+        resetPID();
+    }
+
+    private void resetPID() {
+        integralSum = 0.0;
+        lastError = 0.0;
     }
 
     private double rpmToTicksPerSecond(double rpm) {
-        return rpm * MOTOR_REVS_PER_FLYWHEEL_REV
+        return rpm * MOTOR_REVS_PER_OUTTAKE_REV
                 * MOTOR_TICKS_PER_REVOLUTION / 60.0;
     }
 
     private double ticksPerSecondToRpm(double ticksPerSecond) {
         return ticksPerSecond * 60.0
-                / (MOTOR_TICKS_PER_REVOLUTION * MOTOR_REVS_PER_FLYWHEEL_REV);
+                / (MOTOR_TICKS_PER_REVOLUTION * MOTOR_REVS_PER_OUTTAKE_REV);
     }
 
     private double clamp(double value, double min, double max) {
