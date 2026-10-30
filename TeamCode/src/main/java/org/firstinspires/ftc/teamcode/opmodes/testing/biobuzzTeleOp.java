@@ -15,10 +15,10 @@ public class biobuzzTeleOp extends LinearOpMode {
     private double theta;
     @Override
     public void runOpMode() {
+        Hardware.resetInstance();
         hw               = Hardware.getInstance(hardwareMap);
         mecanumCommand   = new MecanumCommand(hw);
 
-        Hardware.resetInstance();
         hw.lf.setDirection(DcMotorSimple.Direction.REVERSE);
         hw.lb.setDirection(DcMotorSimple.Direction.REVERSE);
         hw.rf.setDirection(DcMotorSimple.Direction.FORWARD);
@@ -28,6 +28,9 @@ public class biobuzzTeleOp extends LinearOpMode {
         hw.lb.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
         hw.rf.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
         hw.rb.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
+
+        telemetry.addLine("Robot Initialized");
+        telemetry.update();
 
         waitForStart();
 
@@ -43,22 +46,12 @@ public class biobuzzTeleOp extends LinearOpMode {
             double inputX = applyDeadband(gamepad1.left_stick_x);
             double inputR = applyDeadband(gamepad1.right_stick_x);
 
-            double y = -gamepad1.left_stick_y;
-            double x = gamepad1.left_stick_x;
-            double rx = gamepad1.right_stick_x;
             boolean intake = gamepad1.right_trigger > 0.5;
             boolean outtake = gamepad1.left_trigger > 0.5;
             boolean spit = gamepad1.right_bumper;
 
-            double denominator = Math.max(Math.abs(y) + Math.abs(x) + Math.abs(rx), 1);
-
-            double frontLeftPower = (y + x + rx) / denominator;
-            double backLeftPower = (y - x + rx) / denominator;
-            double frontRightPower = (y - x - rx) / denominator;
-            double backRightPower = (y + x - rx) / denominator;
-
             if (intake) {
-                hw.intake.setPower(0.8);
+                hw.intake.setPower(1);
             } else if (spit) {
                 hw.intake.setPower(-0.8);
             } else {
@@ -73,41 +66,27 @@ public class biobuzzTeleOp extends LinearOpMode {
                 hw.transfer.setPower(0);
             }
 
-            hw.lf.setPower(frontLeftPower);
-            hw.lb.setPower(backLeftPower);
-            hw.rf.setPower(frontRightPower);
-            hw.rb.setPower(backRightPower);
+            theta = mecanumCommand.normalMove(inputY, inputX, inputR);
 
-            telemetry.addData("Forward", y);
-            telemetry.addData("Strafe", x);
-            telemetry.addData("Turn", rx);
+            telemetry.addData("Forward", inputY);
+            telemetry.addData("Strafe", inputX);
+            telemetry.addData("Turn", inputR);
 
             telemetry.addData("Intake", intake);
             telemetry.addData("Outtake", outtake);
             telemetry.addData("Spit", spit);
 
-            telemetry.addData("Front left", frontLeftPower);
-            telemetry.addData("Back left", backLeftPower);
-            telemetry.addData("Front right", frontRightPower);
-            telemetry.addData("Back right", backRightPower);
+            telemetry.addData("Front left", hw.lf.getPower());
+            telemetry.addData("Back left", hw.lb.getPower());
+            telemetry.addData("Front right", hw.rf.getPower());
+            telemetry.addData("Back right", hw.rb.getPower());
 
             telemetry.update();
-
-            theta = mecanumCommand.normalMove(inputY, inputX, inputR);
         }
 
     }
 
     private double applyDeadband(double value) {
         return Math.abs(value) < 0.05 ? 0 : value;
-    }
-
-    private void teleopAcknowledgeReset(Hardware robot) {
-        // Reset the instance at the start of initialization if needed for safety
-        Hardware.resetInstance();
-        robot = Hardware.getInstance(hardwareMap);
-
-        telemetry.addLine("Robot Initialized");
-        telemetry.update();
     }
 }
