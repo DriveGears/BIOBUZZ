@@ -13,10 +13,18 @@ public class biobuzzTeleOp extends LinearOpMode {
     private Hardware hw;
     private MecanumCommand mecanumCommand;
     private double theta;
+    private boolean intakeOn = false;
+    private boolean lastA = false;
+
     @Override
     public void runOpMode() {
         hw               = Hardware.getInstance(hardwareMap);
         mecanumCommand   = new MecanumCommand(hw);
+
+        if (hw.intake != null) {
+            hw.intake.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
+            hw.intake.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
+        }
 
         waitForStart();
 
@@ -33,8 +41,25 @@ public class biobuzzTeleOp extends LinearOpMode {
             double inputR = applyDeadband(gamepad1.right_stick_x);
 
             theta = mecanumCommand.normalMove(inputY, inputX, inputR);
+
+            // Intake toggle with A button
+            boolean currentA = gamepad1.a;
+            if (currentA && !lastA) {
+                intakeOn = !intakeOn;
+            }
+            lastA = currentA;
+
+            if (hw.intake != null) {
+                hw.intake.setPower(intakeOn ? 1.0 : 0.0);
+            }
+
+            telemetry.addData("Intake", intakeOn ? "ON (1.0)" : "OFF");
+            telemetry.update();
         }
 
+        if (hw.intake != null) {
+            hw.intake.setPower(0);
+        }
     }
 
     private double applyDeadband(double value) {
