@@ -15,4 +15,6 @@ public class Specifications {
     public static final String TURRET = "turret";
     public static final String LIMELIGHT = "limelight";
 
+    public static final String ODO = "odo";
+
 }

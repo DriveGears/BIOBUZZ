@@ -1,5 +1,6 @@
 package org.firstinspires.ftc.teamcode;
 
+import com.qualcomm.hardware.gobilda.GoBildaPinpointDriver;
 import com.qualcomm.hardware.limelightvision.Limelight3A;
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
@@ -17,6 +18,8 @@ public class Hardware {
     public final DcMotorEx intake;
     public final DcMotorEx transfer;
     public final DcMotorEx turret;
+
+    public final GoBildaPinpointDriver odo;
     public Limelight3A limelight = null;
 
     public Hardware(HardwareMap hwMap) {
@@ -29,6 +32,7 @@ public class Hardware {
         this.transfer = hwMap.get(DcMotorEx.class, Specifications.TRANSFER);
         this.turret = hwMap.get(DcMotorEx.class, Specifications.TURRET);
         this.limelight = hwMap.get(Limelight3A.class,Specifications.LIMELIGHT);
+        this.odo = hwMap.get(GoBildaPinpointDriver.class,Specifications.ODO);
 
         lf.setDirection(DcMotorEx.Direction.REVERSE);
         lb.setDirection(DcMotorEx.Direction.REVERSE);
