@@ -37,7 +37,7 @@ public class outtakeTest extends LinearOpMode {
 
     private boolean flywheelOn = false;
     private boolean intakeOn = false;
-    private boolean transferOn = false;
+    private boolean transferOn = true;
 
     private boolean lastX = false;
     private boolean lastY = false;
