@@ -1,4 +1,4 @@
-package org.firstinspires.ftc.teamcode;
+package org.firstinspires.ftc.teamcode.subsystems;
 
 import com.qualcomm.hardware.limelightvision.LLResult;
 import com.qualcomm.hardware.limelightvision.LLResultTypes;
@@ -8,8 +8,10 @@ import com.qualcomm.robotcore.util.ElapsedTime;
 import org.firstinspires.ftc.robotcore.external.navigation.AngleUnit;
 import org.firstinspires.ftc.robotcore.external.navigation.DistanceUnit;
 import org.firstinspires.ftc.robotcore.external.navigation.UnnormalizedAngleUnit;
+import org.firstinspires.ftc.teamcode.hardware.Hardware;
 
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Deque;
 import java.util.List;
@@ -19,13 +21,16 @@ public class turretSubsystem2 {
 
     // ========================= VALUES TO CALIBRATE =========================
 
+    /** Displayed by the test TeleOp so the deployed tuning profile is verifiable. */
+    public static final String TUNE_VERSION = "smooth-pid-v1-cluster";
+
     /** Limelight AprilTag pipeline number. */
     public static final int APRILTAG_PIPELINE = 1;
 
     /** Target AprilTag cluster IDs. */
     public static final int[] TARGET_TAG_IDS = {42, 43, 44, 45};
 
-    /** Per-tag horizontal corrections, in the same order. Positive moves the aim point left. */
+    /** Per-tag optical corrections, in the same order. Positive subtracts from measured Tx. */
     public static final double[] TAG_AIM_OFFSETS_DEG = {};
 
     /** Optional per-tag heights, in the same order. Empty uses DEFAULT_TAG_HEIGHT_IN. */
@@ -43,25 +48,37 @@ public class turretSubsystem2 {
     /** Encoder safety limits (System 1 limits). */
     public static final int MIN_TURRET_TICKS = -135;
     public static final int MAX_TURRET_TICKS = 135;
-    public static final double MAX_TURRET_POWER = 0.45;
+    public static final double MAX_TURRET_POWER = 0.40;
 
     /** Camera geometry for calculating horizontal floor distance. */
     public static final double CAMERA_HEIGHT_IN = 48.0;
     public static final double DEFAULT_TAG_HEIGHT_IN = 14.5;
     public static final double CAMERA_DOWN_ANGLE_DEG = 24.24;
 
-    /** PID gains combining System 1 stability (no overshoot) and System 2 fast reaction speed. */
-    public static final double POSITION_KP = 0.032;
-    public static final double VELOCITY_KD = 0.0045;
-    public static final double VELOCITY_KV = 0.0025; //0.0005
-    public static final double POSITION_KI = 0.005;
-    public static final double MAX_INTEGRAL_POWER = 0.05;
-    public static final double STICTION_POWER = 0.0;//0.03
+    /**
+     * Official SDK 12 BIOBUZZ cluster geometry for IDs 42-45. Tag X positions
+     * are relative to the CELL opening center, which is the official aim origin.
+     */
+    public static final double[] CLUSTER_TAG_X_OFFSETS_IN = {
+            -6.50, -2.75, 2.75, 6.50
+    };
+    public static final double CLUSTER_AIM_POINT_FORWARD_OF_TAGS_IN = 7.1874;
 
-    /** Vision correction gain for fast reaction speed without overshooting. */
+    /** Conservative smooth baseline, used with velocity and proximity smoothing below. */
+    public static final double POSITION_KP = 0.055;
+    public static final double VELOCITY_KD = 0.0040;
+    public static final double VELOCITY_KV = 0.0015;
+    public static final double POSITION_KI = 0.0005;
+    public static final double MAX_INTEGRAL_POWER = 0.025;
+    public static final double STICTION_POWER = 0.050;
+
+    /** Lower values trade reaction speed for less vision-induced twitching. */
     public static final double VISION_CORRECTION_GAIN = 0.12;
     public static final double AIM_TOLERANCE_DEG = 0.40;
-    public static final int AIM_STABLE_FRAMES = 1;
+    public static final int AIM_STABLE_FRAMES = 2;
+
+    /** System 1 leaves latency compensation off for smoother initial tuning. */
+    public static final boolean LATENCY_COMPENSATION_ENABLED = false;
 
     /** Motion prediction: tune flight time after basic stationary aiming works. */
     public static final boolean PREDICTION_ENABLED = false;
@@ -98,6 +115,9 @@ public class turretSubsystem2 {
     private static final double ENCODER_HISTORY_MS = 400.0;
     private static final double SETPOINT_DEADBAND_TICKS = 0.8;
     private static final double STICTION_FADE_TICKS = 5.0;
+    private static final double MOTOR_VELOCITY_FILTER_ALPHA = 0.30;
+    private static final double FULL_POWER_ERROR_TICKS = 25.0;
+    private static final double MIN_PROXIMITY_POWER_SCALE = 0.25;
 
     private final Hardware robot;
     private final DcMotorEx turretMotor;
@@ -110,6 +130,9 @@ public class turretSubsystem2 {
     private double manualPower;
     private int selectedTagId = -1;
     private String visibleTagIds = "none";
+    private int visibleTagCount;
+    private boolean clusterGeometryValid;
+    private double lastClusterTagPlaneDepthIn = Double.NaN;
     private double lastFrameTimestamp = -1;
     private double lastTargetSeenMs = -1;
 
@@ -150,10 +173,14 @@ public class turretSubsystem2 {
     private boolean targetTicksInitialized;
     private double integralPower;
     private double appliedPower;
+    private double filteredMotorVelocityTicksPerSecond;
+    private boolean motorVelocityInitialized;
 
     public turretSubsystem2(Hardware robot) {
         this.robot = robot;
         turretMotor = robot.turret;
+        // Never carry a stale command into this subsystem's initialization.
+        turretMotor.setPower(0);
         robot.limelight.pipelineSwitch(APRILTAG_PIPELINE);
         robot.limelight.setPollRateHz(100);
         robot.limelight.start();
@@ -173,11 +200,31 @@ public class turretSubsystem2 {
         manualPower = clamp(power, -MAX_TURRET_POWER, MAX_TURRET_POWER);
     }
 
+    /**
+     * Defines the current physical angle as the center of the software limits.
+     * Call only when the turret is at its intended forward/center position.
+     */
+    public void zeroAtCurrentPosition() {
+        turretMotor.setPower(0);
+        robot.setTurretCurrentPositionAsZero();
+        targetTicks = 0;
+        targetVelocityTicksPerSecond = 0;
+        targetTicksInitialized = false;
+        integralPower = 0;
+        appliedPower = 0;
+        manualPower = 0;
+        encoderHistory.clear();
+        motorVelocityInitialized = false;
+        stableAimFrames = 0;
+        aimReady = false;
+    }
+
     /** Call once per OpMode loop. */
     public void update(double dtSeconds) {
         double dt = clamp(dtSeconds, 0.001, 0.100);
         double nowMs = clock.milliseconds();
-        int currentTicks = turretMotor.getCurrentPosition();
+        int currentTicks = robot.getTurretPositionTicks();
+        updateFilteredMotorVelocity();
 
         updateOdometry();
         saveEncoderSample(nowMs, currentTicks);
@@ -199,10 +246,12 @@ public class turretSubsystem2 {
 
         List<LLResultTypes.FiducialResult> tags = fresh ? result.getFiducialResults() : null;
         updateVisibleTagText(tags);
-        LLResultTypes.FiducialResult target = selectTarget(tags);
-        targetVisible = target != null;
+        List<LLResultTypes.FiducialResult> clusterTags = selectClusterTags(tags);
+        targetVisible = !clusterTags.isEmpty();
+        visibleTagCount = clusterTags.size();
 
         if (!targetVisible) {
+            clusterGeometryValid = false;
             aimReady = false;
             stableAimFrames = 0;
             targetRateDegPerSec *= 0.90;
@@ -219,16 +268,19 @@ public class turretSubsystem2 {
         lastFrameTimestamp = frameTimestamp;
         lastTargetSeenMs = nowMs;
 
-        filteredTxDeg = addAndMedian(txHistory, txHistoryCount, target.getTargetXDegrees());
+        ClusterAim clusterAim = calculateClusterAim(clusterTags);
+        filteredTxDeg = addAndMedian(txHistory, txHistoryCount, clusterAim.txDeg);
         txHistoryCount = Math.min(txHistoryCount + 1, txHistory.length);
-        updateDistance(target, selectedTagId);
+        updateDistance(clusterAim.averageTyDeg, selectedTagId,
+                clusterAim.horizontalDistanceIn);
 
         lastLatencyMs = result.getStaleness() + result.getCaptureLatency()
                 + result.getTargetingLatency() + EXTRA_LATENCY_MS;
         double captureTimeMs = nowMs - lastLatencyMs;
         double ticksAtCapture = encoderTicksAt(captureTimeMs);
-        double turretMovementDeg = (currentTicks - ticksAtCapture) / TICKS_PER_DEGREE;
-        double horizontalErrorDeg = filteredTxDeg - aimOffsetForTag(selectedTagId);
+        double turretMovementDeg = LATENCY_COMPENSATION_ENABLED
+                ? (currentTicks - ticksAtCapture) / TICKS_PER_DEGREE : 0;
+        double horizontalErrorDeg = filteredTxDeg;
 
         double bearingAtCaptureDeg = horizontalErrorDeg - ticksAtCapture / TICKS_PER_DEGREE;
         lastRobotBearingDeg = bearingAtCaptureDeg;
@@ -253,12 +305,15 @@ public class turretSubsystem2 {
         }
     }
 
-    private void updateDistance(LLResultTypes.FiducialResult target, int tagId) {
-        double depressionAngleDeg = CAMERA_DOWN_ANGLE_DEG - target.getTargetYDegrees();
-        if (depressionAngleDeg <= MIN_DISTANCE_ANGLE_DEG) return;
-
-        double rawDistanceIn = (CAMERA_HEIGHT_IN - tagHeightForId(tagId))
-                / Math.tan(Math.toRadians(depressionAngleDeg));
+    private void updateDistance(
+            double targetYDegrees, int tagId, double clusterDistanceIn) {
+        double rawDistanceIn = clusterDistanceIn;
+        if (!Double.isFinite(rawDistanceIn)) {
+            double depressionAngleDeg = CAMERA_DOWN_ANGLE_DEG - targetYDegrees;
+            if (Math.abs(depressionAngleDeg) <= MIN_DISTANCE_ANGLE_DEG) return;
+            rawDistanceIn = (CAMERA_HEIGHT_IN - tagHeightForId(tagId))
+                    / Math.tan(Math.toRadians(depressionAngleDeg));
+        }
         if (rawDistanceIn <= 0 || rawDistanceIn >= MAX_DISTANCE_IN) return;
 
         double medianDistance = addAndMedian(
@@ -421,15 +476,19 @@ public class turretSubsystem2 {
             targetTicks = currentTicks;
             targetVelocityTicksPerSecond = 0;
             integralPower = 0;
-        } else {
+        } else if (PREDICTION_ENABLED) {
             targetVelocityTicksPerSecond = AIM_DIRECTION_SIGN
                     * removeRateDeadband(getPredictionTargetRateDegPerSec())
                     * TICKS_PER_DEGREE;
+        } else {
+            // Match System 1: prediction off means a stationary encoder setpoint.
+            targetVelocityTicksPerSecond = 0;
         }
 
         targetTicks = clamp(targetTicks, MIN_TURRET_TICKS, MAX_TURRET_TICKS);
         double positionError = targetTicks - currentTicks;
-        double velocityError = targetVelocityTicksPerSecond - turretMotor.getVelocity();
+        double velocityError = targetVelocityTicksPerSecond
+                - filteredMotorVelocityTicksPerSecond;
 
         if (Math.abs(positionError) < SETPOINT_DEADBAND_TICKS
                 && Math.abs(targetVelocityTicksPerSecond) < 2.0) {
@@ -443,16 +502,33 @@ public class turretSubsystem2 {
                     STICTION_POWER * clamp(
                             Math.abs(positionError) / STICTION_FADE_TICKS, 0, 1),
                     positionError);
-            appliedPower = MOTOR_DIRECTION_SIGN * (
+            double controllerPower =
                     POSITION_KP * positionError
                             + VELOCITY_KD * velocityError
                             + VELOCITY_KV * targetVelocityTicksPerSecond
-                            + integralPower + stiction);
+                            + integralPower + stiction;
+
+            // Reduce every inner-loop term near the setpoint, as System 1 does.
+            double proximityScale = clamp(
+                    Math.abs(positionError) / FULL_POWER_ERROR_TICKS,
+                    MIN_PROXIMITY_POWER_SCALE, 1.0);
+            appliedPower = MOTOR_DIRECTION_SIGN * controllerPower * proximityScale;
         }
 
         appliedPower = limitAtSoftStops(
                 clamp(appliedPower, -MAX_TURRET_POWER, MAX_TURRET_POWER), currentTicks);
         turretMotor.setPower(appliedPower);
+    }
+
+    private void updateFilteredMotorVelocity() {
+        double rawVelocity = turretMotor.getVelocity();
+        if (!motorVelocityInitialized) {
+            filteredMotorVelocityTicksPerSecond = rawVelocity;
+            motorVelocityInitialized = true;
+            return;
+        }
+        filteredMotorVelocityTicksPerSecond += MOTOR_VELOCITY_FILTER_ALPHA
+                * (rawVelocity - filteredMotorVelocityTicksPerSecond);
     }
 
     private void applyManualControl(int currentTicks) {
@@ -469,26 +545,172 @@ public class turretSubsystem2 {
         return power;
     }
 
-    private LLResultTypes.FiducialResult selectTarget(
+    private List<LLResultTypes.FiducialResult> selectClusterTags(
             List<LLResultTypes.FiducialResult> tags) {
-        if (tags == null || tags.isEmpty()) return null;
+        List<LLResultTypes.FiducialResult> selected = new ArrayList<>();
+        if (tags == null || tags.isEmpty()) return selected;
 
-        LLResultTypes.FiducialResult best = null;
+        int representativeId = Integer.MAX_VALUE;
         for (LLResultTypes.FiducialResult tag : tags) {
             if (!isAllowedTag(tag.getFiducialId())) continue;
-            if (tag.getFiducialId() == selectedTagId) return tag;
-            if (best == null || Math.abs(tag.getTargetXDegrees())
-                    < Math.abs(best.getTargetXDegrees())) {
-                best = tag;
+            selected.add(tag);
+            representativeId = Math.min(representativeId, tag.getFiducialId());
+        }
+        if (!selected.isEmpty()) {
+            selectedTagId = representativeId;
+        }
+        return selected;
+    }
+
+    /** Horizontal aim to the official cluster origin, not to an individual tag. */
+    private ClusterAim calculateClusterAim(
+            List<LLResultTypes.FiducialResult> tags) {
+        int count = tags.size();
+        double sumTanTx = 0;
+        double sumX = 0;
+        double sumTy = 0;
+
+        for (LLResultTypes.FiducialResult tag : tags) {
+            double correctedTxDeg = tag.getTargetXDegrees()
+                    - aimOffsetForTag(tag.getFiducialId());
+            sumTanTx += Math.tan(Math.toRadians(correctedTxDeg));
+            sumX += clusterXForTag(tag.getFiducialId());
+            sumTy += tag.getTargetYDegrees();
+        }
+
+        double meanTanTx = sumTanTx / count;
+        double meanX = sumX / count;
+        double averageTyDeg = sumTy / count;
+        double tagPlaneDepthIn = Double.NaN;
+        double clusterLateralIn = Double.NaN;
+
+        // tan(tx) = (cluster lateral + tag X) / tag-plane depth.
+        // Two or more tags therefore provide a direct depth and center solution.
+        if (count >= 2) {
+            double covariance = 0;
+            double xVariance = 0;
+            for (LLResultTypes.FiducialResult tag : tags) {
+                double x = clusterXForTag(tag.getFiducialId());
+                double correctedTxDeg = tag.getTargetXDegrees()
+                        - aimOffsetForTag(tag.getFiducialId());
+                double tanTx = Math.tan(Math.toRadians(correctedTxDeg));
+                covariance += (x - meanX) * (tanTx - meanTanTx);
+                xVariance += (x - meanX) * (x - meanX);
+            }
+            double slope = xVariance > 1e-6 ? covariance / xVariance : 0;
+            if (slope > 1.0 / MAX_DISTANCE_IN) {
+                tagPlaneDepthIn = 1.0 / slope;
+                if (tagPlaneDepthIn > CLUSTER_AIM_POINT_FORWARD_OF_TAGS_IN + 1.0
+                        && tagPlaneDepthIn < MAX_DISTANCE_IN) {
+                    clusterLateralIn = (meanTanTx - slope * meanX)
+                            * tagPlaneDepthIn;
+                    lastClusterTagPlaneDepthIn = tagPlaneDepthIn;
+                } else {
+                    tagPlaneDepthIn = Double.NaN;
+                }
             }
         }
 
-        if (best != null && best.getFiducialId() != selectedTagId) {
-            selectedTagId = best.getFiducialId();
-            resetMeasurementHistory();
-            targetTicksInitialized = false;
+        // With one visible tag, use its 3D range. If unavailable, preserve the
+        // most recent depth solved from multiple tags so partial occlusion does
+        // not move the aim point to that tag.
+        if (!Double.isFinite(tagPlaneDepthIn)) {
+            double depthSum = 0;
+            int depthCount = 0;
+            for (LLResultTypes.FiducialResult tag : tags) {
+                double depth = estimateOpticalDepthIn(tag);
+                if (Double.isFinite(depth)) {
+                    depthSum += depth;
+                    depthCount++;
+                }
+            }
+            tagPlaneDepthIn = depthCount > 0
+                    ? depthSum / depthCount : lastClusterTagPlaneDepthIn;
+
+            if (Double.isFinite(tagPlaneDepthIn)
+                    && tagPlaneDepthIn > CLUSTER_AIM_POINT_FORWARD_OF_TAGS_IN + 1.0) {
+                double lateralSum = 0;
+                for (LLResultTypes.FiducialResult tag : tags) {
+                    double correctedTxDeg = tag.getTargetXDegrees()
+                            - aimOffsetForTag(tag.getFiducialId());
+                    lateralSum += tagPlaneDepthIn
+                            * Math.tan(Math.toRadians(correctedTxDeg))
+                            - clusterXForTag(tag.getFiducialId());
+                }
+                clusterLateralIn = lateralSum / count;
+                lastClusterTagPlaneDepthIn = tagPlaneDepthIn;
+            }
         }
-        return best;
+
+        clusterGeometryValid = Double.isFinite(clusterLateralIn)
+                && Double.isFinite(tagPlaneDepthIn);
+        double centerTxDeg;
+        double horizontalDistanceIn = Double.NaN;
+        if (clusterGeometryValid) {
+            double aimPointDepthIn = tagPlaneDepthIn
+                    - CLUSTER_AIM_POINT_FORWARD_OF_TAGS_IN;
+            centerTxDeg = Math.toDegrees(
+                    Math.atan2(clusterLateralIn, aimPointDepthIn));
+
+            // Convert the geometry-solved optical range to an approximate floor
+            // distance using the calibrated camera pitch. This avoids relying on
+            // a fixed sticker height on the moving BIOBUZZ CELL.
+            double opticalHorizontalRangeIn = Math.hypot(
+                    aimPointDepthIn, clusterLateralIn);
+            double opticalElevationRad = Math.toRadians(averageTyDeg);
+            double cosOpticalElevation = Math.cos(opticalElevationRad);
+            if (Math.abs(cosOpticalElevation) > 0.1) {
+                double slantRangeIn = opticalHorizontalRangeIn
+                        / cosOpticalElevation;
+                double fieldElevationRad = Math.toRadians(
+                        averageTyDeg - CAMERA_DOWN_ANGLE_DEG);
+                horizontalDistanceIn = Math.abs(
+                        slantRangeIn * Math.cos(fieldElevationRad));
+            }
+        } else {
+            // Safe startup fallback if Limelight 3D is disabled and only one tag
+            // has ever been visible. Multiple visible tags use their angular mean.
+            centerTxDeg = Math.toDegrees(Math.atan(meanTanTx));
+        }
+        return new ClusterAim(
+                centerTxDeg, averageTyDeg, horizontalDistanceIn);
+    }
+
+    private double estimateOpticalDepthIn(LLResultTypes.FiducialResult tag) {
+        if (tag.getTargetPoseCameraSpace() == null
+                || tag.getTargetPoseCameraSpace().getPosition() == null) {
+            return Double.NaN;
+        }
+        org.firstinspires.ftc.robotcore.external.navigation.Position position =
+                tag.getTargetPoseCameraSpace().getPosition().toUnit(DistanceUnit.INCH);
+        double slantRangeIn = Math.sqrt(position.x * position.x
+                + position.y * position.y + position.z * position.z);
+        if (!Double.isFinite(slantRangeIn) || slantRangeIn < 1.0
+                || slantRangeIn >= MAX_DISTANCE_IN) {
+            return Double.NaN;
+        }
+        double tanTx = Math.tan(Math.toRadians(tag.getTargetXDegrees()));
+        double tanTy = Math.tan(Math.toRadians(tag.getTargetYDegrees()));
+        return slantRangeIn / Math.sqrt(1.0 + tanTx * tanTx + tanTy * tanTy);
+    }
+
+    private double clusterXForTag(int id) {
+        int index = indexOfTag(id);
+        return index >= 0 && index < CLUSTER_TAG_X_OFFSETS_IN.length
+                ? CLUSTER_TAG_X_OFFSETS_IN[index] : 0;
+    }
+
+    private static class ClusterAim {
+        final double txDeg;
+        final double averageTyDeg;
+        final double horizontalDistanceIn;
+
+        ClusterAim(
+                double txDeg, double averageTyDeg, double horizontalDistanceIn) {
+            this.txDeg = txDeg;
+            this.averageTyDeg = averageTyDeg;
+            this.horizontalDistanceIn = horizontalDistanceIn;
+        }
     }
 
     private boolean isAllowedTag(int id) {
@@ -555,7 +777,7 @@ public class turretSubsystem2 {
             }
             previous = sample;
         }
-        return previous == null ? turretMotor.getCurrentPosition() : previous[1];
+        return previous == null ? robot.getTurretPositionTicks() : previous[1];
     }
 
     private double addAndMedian(double[] history, int count, double value) {
@@ -583,6 +805,8 @@ public class turretSubsystem2 {
         targetRateDegPerSec = 0;
         rangeRateInPerSec = 0;
         lastRobotBearingDeg = Double.NaN;
+        lastClusterTagPlaneDepthIn = Double.NaN;
+        clusterGeometryValid = false;
         panLeadDeg = 0;
         aimReady = false;
         stableAimFrames = 0;
@@ -593,6 +817,8 @@ public class turretSubsystem2 {
     public boolean isAimReady() { return aimReady; }
     public int getSelectedTagId() { return selectedTagId; }
     public String getVisibleTagIds() { return visibleTagIds; }
+    public int getVisibleTagCount() { return visibleTagCount; }
+    public boolean isClusterGeometryValid() { return clusterGeometryValid; }
     public double getFilteredTxDeg() { return filteredTxDeg; }
     public double getDistanceIn() { return filteredDistanceIn; }
     public double getImpactDistanceIn() { return impactDistanceIn; }
@@ -610,8 +836,15 @@ public class turretSubsystem2 {
     public double getPredictionTimeS() { return predictionTimeS; }
     public double getLastVisionErrorDeg() { return lastVisionErrorDeg; }
     public double getLastLatencyMs() { return lastLatencyMs; }
-    public int getCurrentTicks() { return turretMotor.getCurrentPosition(); }
+    public int getCurrentTicks() { return robot.getTurretPositionTicks(); }
     public double getTargetTicks() { return targetTicks; }
+    public double getPositionErrorTicks() {
+        return targetTicks - robot.getTurretPositionTicks();
+    }
+    public double getFilteredMotorVelocityTicksPerSecond() {
+        return filteredMotorVelocityTicksPerSecond;
+    }
+    public double getIntegralPower() { return integralPower; }
     public double getAppliedPower() { return appliedPower; }
 
     public void stop() {

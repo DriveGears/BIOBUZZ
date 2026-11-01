@@ -1,6 +1,8 @@
-package org.firstinspires.ftc.teamcode;
+package org.firstinspires.ftc.teamcode.subsystems;
 
 import com.qualcomm.robotcore.hardware.DcMotor;
+
+import org.firstinspires.ftc.teamcode.hardware.Hardware;
 
 /** Controls OUTTAKE RPM using software PIDF in RUN_WITHOUT_ENCODER mode and runs intake/transfer. */
 public class shooterSubsystem {
