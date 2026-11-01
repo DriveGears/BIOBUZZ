@@ -14,7 +14,9 @@ public class biobuzzTeleOp extends LinearOpMode {
     private MecanumCommand mecanumCommand;
     private double theta;
     private boolean intakeOn = false;
+    private boolean transferOn = false;
     private boolean lastA = false;
+    private boolean lastY = false;
 
     @Override
     public void runOpMode() {
@@ -24,6 +26,11 @@ public class biobuzzTeleOp extends LinearOpMode {
         if (hw.intake != null) {
             hw.intake.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
             hw.intake.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
+        }
+
+        if (hw.transfer != null) {
+            hw.transfer.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
+            hw.transfer.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
         }
 
         waitForStart();
@@ -53,12 +60,27 @@ public class biobuzzTeleOp extends LinearOpMode {
                 hw.intake.setPower(intakeOn ? 1.0 : 0.0);
             }
 
+            // Transfer toggle with Y button
+            boolean currentY = gamepad1.y;
+            if (currentY && !lastY) {
+                transferOn = !transferOn;
+            }
+            lastY = currentY;
+
+            if (hw.transfer != null) {
+                hw.transfer.setPower(transferOn ? 1.0 : 0.0);
+            }
+
             telemetry.addData("Intake", intakeOn ? "ON (1.0)" : "OFF");
+            telemetry.addData("Transfer", transferOn ? "ON (1.0)" : "OFF");
             telemetry.update();
         }
 
         if (hw.intake != null) {
             hw.intake.setPower(0);
+        }
+        if (hw.transfer != null) {
+            hw.transfer.setPower(0);
         }
     }
 
