@@ -1,10 +1,8 @@
-package org.firstinspires.ftc.teamcode;
+package org.firstinspires.ftc.teamcode.hardware;
 
 import com.qualcomm.hardware.gobilda.GoBildaPinpointDriver;
 import com.qualcomm.hardware.limelightvision.Limelight3A;
-import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
-import com.qualcomm.robotcore.hardware.DcMotorSimple;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 
 public class Hardware {
@@ -18,6 +16,9 @@ public class Hardware {
     public final DcMotorEx intake;
     public final DcMotorEx transfer;
     public final DcMotorEx turret;
+
+    /** Raw encoder count captured while the turret is centered during INIT. */
+    private int turretEncoderZeroTicks;
 
     public final GoBildaPinpointDriver odo;
     public Limelight3A limelight = null;
@@ -53,6 +54,7 @@ public class Hardware {
         turret.setZeroPowerBehavior(DcMotorEx.ZeroPowerBehavior.BRAKE);
 
         turret.setMode(DcMotorEx.RunMode.RUN_USING_ENCODER);
+        setTurretCurrentPositionAsZero();
     }
 
     public static Hardware getInstance(HardwareMap hwMap) {
@@ -62,6 +64,28 @@ public class Hardware {
 
     public static void resetInstance() {
         instance = null;
+    }
+
+    /**
+     * Defines the turret's current physical position as the center (zero).
+     * Only call this while the turret is known to be mechanically centered.
+     */
+    public void setTurretCurrentPositionAsZero() {
+        turretEncoderZeroTicks = turret.getCurrentPosition();
+    }
+
+    /** Returns turret encoder ticks relative to the center captured during INIT. */
+    public int getTurretPositionTicks() {
+        return turret.getCurrentPosition() - turretEncoderZeroTicks;
+    }
+
+    /** Exposed for diagnostics; control code should use getTurretPositionTicks(). */
+    public int getTurretRawEncoderTicks() {
+        return turret.getCurrentPosition();
+    }
+
+    public int getTurretEncoderZeroTicks() {
+        return turretEncoderZeroTicks;
     }
 
 }

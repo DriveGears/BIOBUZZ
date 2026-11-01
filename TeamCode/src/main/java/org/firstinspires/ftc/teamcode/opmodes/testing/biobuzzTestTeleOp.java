@@ -4,18 +4,19 @@ import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.util.ElapsedTime;
 
-import org.firstinspires.ftc.teamcode.Hardware;
-import org.firstinspires.ftc.teamcode.shooterSubsystem;
-import org.firstinspires.ftc.teamcode.turretSubsystem2;
+import org.firstinspires.ftc.teamcode.hardware.Hardware;
+import org.firstinspires.ftc.teamcode.subsystems.shooterSubsystem;
+import org.firstinspires.ftc.teamcode.subsystems.turretSubsystem2;
 
 @TeleOp(name = "BioBuzz TeleOp", group = "TeleOp")
-public class biobuzzTeleOp extends LinearOpMode {
+public class biobuzzTestTeleOp extends LinearOpMode {
 
     private static final double DRIVE_SPEED = 0.80;
     private static final double STRAFE_MULTIPLIER = 1.10;
     private static final double MANUAL_TURRET_POWER = 0.25;
 
     private boolean lastShooterButton = false;
+    private boolean lastTurretZeroButton = false;
 
     @Override
     public void runOpMode() {
@@ -28,6 +29,7 @@ public class biobuzzTeleOp extends LinearOpMode {
         telemetry.addLine("BioBuzz TeleOp Ready");
         telemetry.addLine("G1 Left Stick: Drive | Right Trigger: Hold Auto-Aim");
         telemetry.addLine("G1 D-pad L/R: Manual Turret | A: Toggle Shooter/Intakes | B: Stop");
+        telemetry.addLine("Click BOTH sticks: set current turret angle to zero");
         telemetry.update();
 
         waitForStart();
@@ -72,7 +74,15 @@ public class biobuzzTeleOp extends LinearOpMode {
                 shooter.update(dtSeconds);
 
                 // 3. Turret Auto-Aim & Manual Control
-                boolean autoAim = gamepad1.right_trigger > 0.20;
+                boolean turretZeroPressed = gamepad1.left_stick_button
+                        && gamepad1.right_stick_button;
+                if (turretZeroPressed && !lastTurretZeroButton) {
+                    turret.zeroAtCurrentPosition();
+                }
+                lastTurretZeroButton = turretZeroPressed;
+
+                // Do not allow auto aim in the same loop as a zero operation.
+                boolean autoAim = gamepad1.right_trigger > 0.20 && !turretZeroPressed;
                 turret.setAutoAimEnabled(autoAim);
 
                 double manualTurret = (gamepad1.dpad_right ? 1.0 : 0.0) - (gamepad1.dpad_left ? 1.0 : 0.0);
@@ -82,8 +92,32 @@ public class biobuzzTeleOp extends LinearOpMode {
                 // 4. Telemetry
                 telemetry.addData("Drive", "Fwd=%.2f, Strafe=%.2f, Turn=%.2f", forward, strafe, turn);
                 telemetry.addData("Turret Mode", autoAim ? "AUTO-AIM" : "MANUAL");
-                telemetry.addData("Target Visible", turret.hasTarget() ? "YES (ID: " + turret.getSelectedTagId() + ")" : "NO");
+                telemetry.addData("Turret Tune", turretSubsystem2.TUNE_VERSION);
+                telemetry.addData("Target Visible", turret.hasTarget()
+                        ? "YES (" + turret.getVisibleTagCount() + " tags: "
+                                + turret.getVisibleTagIds() + ")" : "NO");
+                telemetry.addData("Cluster Center", turret.isClusterGeometryValid()
+                        ? "GEOMETRY SOLVED" : "ANGULAR FALLBACK");
                 telemetry.addData("Aim Ready?", turret.isAimReady() ? "READY" : "ALIGNING");
+                telemetry.addData("Turret Position", "%d -> %.1f ticks [%d, %d]",
+                        turret.getCurrentTicks(), turret.getTargetTicks(),
+                        turretSubsystem2.MIN_TURRET_TICKS,
+                        turretSubsystem2.MAX_TURRET_TICKS);
+                telemetry.addData("Turret Raw/Zero", "%d / %d",
+                        robot.getTurretRawEncoderTicks(),
+                        robot.getTurretEncoderZeroTicks());
+                telemetry.addData("Turret Limit",
+                        turret.getCurrentTicks() <= turretSubsystem2.MIN_TURRET_TICKS
+                                ? "LEFT SOFT LIMIT"
+                                : turret.getCurrentTicks() >= turretSubsystem2.MAX_TURRET_TICKS
+                                        ? "RIGHT SOFT LIMIT" : "clear");
+                telemetry.addData("Turret PID", "err=%+.1f tk, vel=%+.1f tk/s, pwr=%+.3f, I=%+.3f",
+                        turret.getPositionErrorTicks(),
+                        turret.getFilteredMotorVelocityTicksPerSecond(),
+                        turret.getAppliedPower(),
+                        turret.getIntegralPower());
+                telemetry.addData("Turret Vision", "tx=%+.2f deg, err=%+.2f deg",
+                        turret.getFilteredTxDeg(), turret.getLastVisionErrorDeg());
                 telemetry.addData("Shooter", "Enabled=%s, Actual RPM=%.0f", shooter.isEnabled() ? "ON" : "OFF", shooter.getActualRpm());
                 telemetry.update();
             }
