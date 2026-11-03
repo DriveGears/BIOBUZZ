@@ -47,7 +47,9 @@ public class Hardware {
     }
 
     public static Hardware getInstance(HardwareMap hwMap) {
-        instance = new Hardware(hwMap);
+        if (instance == null) {
+            instance = new Hardware(hwMap);
+        }
         return instance;
     }
 
