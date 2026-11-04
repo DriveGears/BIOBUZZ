@@ -6,25 +6,25 @@ import com.pedropathing.api.PoseFactory;
 import com.pedropathing.math.Pose;
 import org.firstinspires.ftc.teamcode.PedroPathing.Constants;
 import static com.pedropathing.api.Paths.*;
-import com.pedropathing.paths.path;
 import com.pedropathing.ivy.Scheduler;
 import static com.pedropathing.ivy.Scheduler.schedule;
 import static com.pedropathing.ivy.pedro.PedroCommands.follow;
 import com.pedropathing.ivy.Command;
 import static com.pedropathing.ivy.groups.Groups.sequential;
-
+import com.pedropathing.paths.Path;
 
 //p.of( x, y, heading)
 @Autonomous
 public class AUTO extends OpMode{
     private Follower follower;
-    private final PoseFactory p = PoseFactory.degrees();
-    private final Pose startPose = p.of(24, 24, 0); //needs to be tuned
+    private final PoseFactory poseFactory = PoseFactory.degrees();
+    private final Pose startPose = poseFactory.of(24, 24, 0); //needs to be tuned
     private final Pose scorePose = poseFactory.of(48, 48, 90);
     private final Pose parkPose = poseFactory.of(72, 48, 90);
 
+
     //other poses...
-    private final Pose controlPose = p.of(36, 60, 45);
+    private final Pose controlPose = poseFactory.of(36, 60, 45);
 
     private Path park() {
         return line(startPose, parkPose).linear(startPose, parkPose);
