@@ -32,7 +32,7 @@ public class Hardware {
         this.intake = hwMap.get(DcMotorEx.class, Specifications.INTAKE);
         this.transfer = hwMap.get(DcMotorEx.class, Specifications.TRANSFER);
         this.turret = hwMap.get(DcMotorEx.class, Specifications.TURRET);
-        this.limelight = hwMap.get(Limelight3A.class,Specifications.LIMELIGHT);
+//        this.limelight = hwMap.get(Limelight3A.class,Specifications.LIMELIGHT);
         this.odo = hwMap.get(GoBildaPinpointDriver.class,Specifications.ODO);
 
         lf.setDirection(DcMotorEx.Direction.REVERSE);
