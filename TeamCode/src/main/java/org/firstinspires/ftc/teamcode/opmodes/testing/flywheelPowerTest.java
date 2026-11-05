@@ -4,12 +4,12 @@ import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
-
-import org.firstinspires.ftc.teamcode.Hardware;
+import org.firstinspires.ftc.teamcode.hardware.Hardware;
 
 @TeleOp(name = "Flywheel Power Test", group = "Testing")
 public class flywheelPowerTest extends LinearOpMode {
 
+    Hardware robot;
     private double targetPower = 0.5; // Default test power (0.0 to 1.0)
     private static final double POWER_STEP_FINE = 0.05;
     private static final double POWER_STEP_COARSE = 0.20;
@@ -23,7 +23,7 @@ public class flywheelPowerTest extends LinearOpMode {
 
     @Override
     public void runOpMode() {
-        Hardware robot = Hardware.getInstance(hardwareMap);
+        robot = Hardware.getInstance(hardwareMap);
         DcMotorEx flywheel = robot.outtake;
 
         if (flywheel != null) {
