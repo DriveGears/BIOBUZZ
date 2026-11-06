@@ -5,6 +5,7 @@ import com.qualcomm.hardware.limelightvision.LLResultTypes;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
 import com.qualcomm.robotcore.util.ElapsedTime;
 
+import org.firstinspires.ftc.robotcore.external.navigation.AngleUnit;
 import org.firstinspires.ftc.robotcore.external.navigation.DistanceUnit;
 import org.firstinspires.ftc.robotcore.external.navigation.UnnormalizedAngleUnit;
 import org.firstinspires.ftc.teamcode.hardware.Hardware;
@@ -97,6 +98,8 @@ public class turretSubsystem2 {
     public static double ODOMETRY_LEFT_SIGN = 1.0;
     public static double ODOMETRY_HEADING_SIGN = 1.0;
     public static double ODOMETRY_BEARING_SIGN = -1.0;
+    /** Maximum dead-reckoning time after vision loss; BIOBUZZ CELLs can move. */
+    public static double ODOMETRY_TARGET_HOLD_MS = 1000.0;
 
     // ========================= NORMAL CONSTANTS =========================
 
@@ -156,10 +159,22 @@ public class turretSubsystem2 {
     private double robotForwardVelocityInPerSec;
     private double robotLeftVelocityInPerSec;
     private double robotHeadingRateRadPerSec;
+    private double robotFieldXIn;
+    private double robotFieldYIn;
+    private double robotFieldHeadingRad;
     private double odometryTargetRateDegPerSec;
     private double odometryRangeRateInPerSec;
     private double lastRobotBearingDeg = Double.NaN;
     private boolean odometryRateValid;
+    private boolean odometryPoseValid;
+
+    /** Last vision target stored in Pinpoint field coordinates. */
+    private double odometryTargetFieldXIn;
+    private double odometryTargetFieldYIn;
+    private double odometryTrackedBearingDeg;
+    private double odometryTrackedDistanceIn;
+    private boolean odometryTargetInitialized;
+    private boolean odometryTrackingActive;
 
     private boolean targetVisible;
     private boolean aimReady;
@@ -196,6 +211,7 @@ public class turretSubsystem2 {
         integralPower = 0;
         stableAimFrames = 0;
         aimReady = false;
+        resetMeasurementHistory();
     }
 
     public void setManualPower(double power) {
@@ -238,6 +254,7 @@ public class turretSubsystem2 {
         updateOdometry();
         saveEncoderSample(nowMs, currentTicks);
         updateVision(nowMs, currentTicks);
+        updateLostTargetFromOdometry(nowMs, currentTicks);
         updateOdometryPredictionRates();
 
         if (autoAimEnabled) {
@@ -265,12 +282,10 @@ public class turretSubsystem2 {
             stableAimFrames = 0;
             targetRateDegPerSec *= 0.90;
             panLeadDeg = 0;
-            if (lastTargetSeenMs >= 0 && nowMs - lastTargetSeenMs > HOLD_AFTER_TARGET_LOSS_MS) {
-                selectedTagId = -1;
-                resetMeasurementHistory();
-            }
             return;
         }
+
+        odometryTrackingActive = false;
 
         double frameTimestamp = result.getTimestamp();
         if (frameTimestamp == lastFrameTimestamp) return;
@@ -298,6 +313,8 @@ public class turretSubsystem2 {
                 + ticksAtCapture / (AIM_DIRECTION_SIGN * TICKS_PER_DEGREE);
         lastRobotBearingDeg = bearingAtCaptureDeg;
         updateTargetRates(captureTimeMs, bearingAtCaptureDeg);
+        saveTargetInFieldCoordinates(
+                bearingAtCaptureDeg, filteredDistanceIn, lastLatencyMs);
         updatePrediction(lastLatencyMs);
 
         lastVisionErrorDeg = horizontalErrorDeg + turretMovementDeg + panLeadDeg;
@@ -387,10 +404,21 @@ public class turretSubsystem2 {
         double leftVelocity = robot.odo.getVelY(DistanceUnit.INCH);
         double headingRateDegPerSec = robot.odo.getHeadingVelocity(
                 UnnormalizedAngleUnit.DEGREES);
+        double fieldX = robot.odo.getPosX(DistanceUnit.INCH);
+        double fieldY = robot.odo.getPosY(DistanceUnit.INCH);
+        double headingRad = robot.odo.getHeading(AngleUnit.RADIANS);
 
         odometryRateValid = Double.isFinite(forwardVelocity)
                 && Double.isFinite(leftVelocity)
                 && Double.isFinite(headingRateDegPerSec);
+        odometryPoseValid = Double.isFinite(fieldX)
+                && Double.isFinite(fieldY)
+                && Double.isFinite(headingRad);
+        if (odometryPoseValid) {
+            robotFieldXIn = fieldX;
+            robotFieldYIn = fieldY;
+            robotFieldHeadingRad = headingRad;
+        }
         if (!odometryRateValid) return;
 
         // Pinpoint X/Y velocity is already robot-relative: X forward, Y left.
@@ -398,6 +426,100 @@ public class turretSubsystem2 {
         robotLeftVelocityInPerSec = ODOMETRY_LEFT_SIGN * leftVelocity;
         robotHeadingRateRadPerSec = ODOMETRY_HEADING_SIGN
                 * Math.toRadians(headingRateDegPerSec);
+    }
+
+    /** Converts the latest camera-relative target into Pinpoint field coordinates. */
+    private void saveTargetInFieldCoordinates(
+            double bearingAtCaptureDeg, double distanceAtCaptureIn, double latencyMs) {
+        if (!odometryPoseValid || !Double.isFinite(distanceAtCaptureIn)
+                || distanceAtCaptureIn < 1.0) {
+            return;
+        }
+
+        double mathBearingRad = Math.toRadians(
+                ODOMETRY_BEARING_SIGN * bearingAtCaptureDeg);
+        double relativeForwardIn = distanceAtCaptureIn * Math.cos(mathBearingRad);
+        double relativeLeftIn = distanceAtCaptureIn * Math.sin(mathBearingRad);
+
+        // Advance the capture-time measurement to approximately "now" using
+        // the current robot twist before anchoring it in the field frame.
+        if (odometryRateValid) {
+            double latencyS = clamp(latencyMs / 1000.0, 0, 0.25);
+            relativeForwardIn -= robotForwardVelocityInPerSec * latencyS;
+            relativeLeftIn -= robotLeftVelocityInPerSec * latencyS;
+            double headingChange = robotHeadingRateRadPerSec * latencyS;
+            double cosChange = Math.cos(headingChange);
+            double sinChange = Math.sin(headingChange);
+            double rotatedForward = cosChange * relativeForwardIn
+                    + sinChange * relativeLeftIn;
+            double rotatedLeft = -sinChange * relativeForwardIn
+                    + cosChange * relativeLeftIn;
+            relativeForwardIn = rotatedForward;
+            relativeLeftIn = rotatedLeft;
+        }
+
+        double cosHeading = Math.cos(robotFieldHeadingRad);
+        double sinHeading = Math.sin(robotFieldHeadingRad);
+        odometryTargetFieldXIn = robotFieldXIn
+                + relativeForwardIn * cosHeading - relativeLeftIn * sinHeading;
+        odometryTargetFieldYIn = robotFieldYIn
+                + relativeForwardIn * sinHeading + relativeLeftIn * cosHeading;
+        odometryTargetInitialized = true;
+    }
+
+    /** Uses the saved field point as the aim source while vision is occluded. */
+    private void updateLostTargetFromOdometry(double nowMs, int currentTicks) {
+        odometryTrackingActive = false;
+        if (targetVisible) return;
+
+        double targetAgeMs = lastTargetSeenMs < 0
+                ? Double.POSITIVE_INFINITY : nowMs - lastTargetSeenMs;
+        boolean canTrack = USE_ODOMETRY_PREDICTION
+                && odometryTargetInitialized
+                && odometryPoseValid
+                && targetAgeMs <= ODOMETRY_TARGET_HOLD_MS;
+
+        if (!canTrack) {
+            if (targetAgeMs > HOLD_AFTER_TARGET_LOSS_MS) {
+                selectedTagId = -1;
+                resetMeasurementHistory();
+            }
+            return;
+        }
+
+        double fieldDeltaX = odometryTargetFieldXIn - robotFieldXIn;
+        double fieldDeltaY = odometryTargetFieldYIn - robotFieldYIn;
+        double cosHeading = Math.cos(robotFieldHeadingRad);
+        double sinHeading = Math.sin(robotFieldHeadingRad);
+        double relativeForwardIn = fieldDeltaX * cosHeading
+                + fieldDeltaY * sinHeading;
+        double relativeLeftIn = -fieldDeltaX * sinHeading
+                + fieldDeltaY * cosHeading;
+        double distanceIn = Math.hypot(relativeForwardIn, relativeLeftIn);
+        if (!Double.isFinite(distanceIn) || distanceIn < 1.0
+                || distanceIn > MAX_DISTANCE_IN) {
+            resetMeasurementHistory();
+            return;
+        }
+
+        double mathBearingDeg = Math.toDegrees(
+                Math.atan2(relativeLeftIn, relativeForwardIn));
+        double bearingDeg = ODOMETRY_BEARING_SIGN * mathBearingDeg;
+        odometryTrackedBearingDeg = bearingDeg;
+        odometryTrackedDistanceIn = distanceIn;
+        lastRobotBearingDeg = bearingDeg;
+        filteredDistanceIn = distanceIn;
+        impactDistanceIn = distanceIn;
+        distanceInitialized = true;
+        odometryTrackingActive = true;
+
+        double physicalTurretBearingDeg = currentTicks
+                / (AIM_DIRECTION_SIGN * TICKS_PER_DEGREE);
+        lastVisionErrorDeg = bearingDeg - physicalTurretBearingDeg;
+        if (autoAimEnabled) {
+            targetTicks = AIM_DIRECTION_SIGN * bearingDeg * TICKS_PER_DEGREE;
+            targetTicksInitialized = true;
+        }
     }
 
     private void updateOdometryPredictionRates() {
@@ -480,7 +602,11 @@ public class turretSubsystem2 {
     private void applyAutomaticControl(double dt, double nowMs, int currentTicks) {
         if (!targetTicksInitialized) targetTicks = currentTicks;
 
-        if (lastTargetSeenMs < 0 || nowMs - lastTargetSeenMs > HOLD_AFTER_TARGET_LOSS_MS) {
+        if (odometryTrackingActive) {
+            targetVelocityTicksPerSecond = AIM_DIRECTION_SIGN
+                    * odometryTargetRateDegPerSec * TICKS_PER_DEGREE;
+        } else if (lastTargetSeenMs < 0
+                || nowMs - lastTargetSeenMs > HOLD_AFTER_TARGET_LOSS_MS) {
             targetTicks = currentTicks;
             targetVelocityTicksPerSecond = 0;
             integralPower = 0;
@@ -806,6 +932,10 @@ public class turretSubsystem2 {
         targetRateDegPerSec = 0;
         rangeRateInPerSec = 0;
         lastRobotBearingDeg = Double.NaN;
+        odometryTargetInitialized = false;
+        odometryTrackingActive = false;
+        odometryTrackedBearingDeg = 0;
+        odometryTrackedDistanceIn = 0;
         lastClusterTagPlaneDepthIn = Double.NaN;
         clusterGeometryValid = false;
         panLeadDeg = 0;
@@ -837,6 +967,14 @@ public class turretSubsystem2 {
         return Math.toDegrees(robotHeadingRateRadPerSec);
     }
     public boolean isOdometryRateValid() { return odometryRateValid; }
+    public boolean isOdometryPoseValid() { return odometryPoseValid; }
+    public boolean isOdometryTrackingActive() { return odometryTrackingActive; }
+    public double getOdometryTrackedBearingDeg() { return odometryTrackedBearingDeg; }
+    public double getOdometryTrackedDistanceIn() { return odometryTrackedDistanceIn; }
+    public double getTargetAgeMs() {
+        return lastTargetSeenMs < 0
+                ? Double.POSITIVE_INFINITY : clock.milliseconds() - lastTargetSeenMs;
+    }
     public double getPredictionTimeS() { return predictionTimeS; }
     public double getLastVisionErrorDeg() { return lastVisionErrorDeg; }
     public double getLastLatencyMs() { return lastLatencyMs; }

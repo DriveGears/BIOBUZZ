@@ -95,7 +95,13 @@ public class biobuzzTestTeleOp extends LinearOpMode {
                 telemetry.addData("Turret Tune", turretSubsystem2.TUNE_VERSION);
                 telemetry.addData("Target Visible", turret.hasTarget()
                         ? "YES (" + turret.getVisibleTagCount() + " tags: "
-                                + turret.getVisibleTagIds() + ")" : "NO");
+                                + turret.getVisibleTagIds() + ")"
+                        : turret.isOdometryTrackingActive()
+                                ? "ODOMETRY (vision lost)" : "NO");
+                telemetry.addData("Odo Target", "active=%s age=%.0f ms bearing=%+.1f dist=%.1f",
+                        turret.isOdometryTrackingActive(), turret.getTargetAgeMs(),
+                        turret.getOdometryTrackedBearingDeg(),
+                        turret.getOdometryTrackedDistanceIn());
                 telemetry.addData("Cluster Center", turret.isClusterGeometryValid()
                         ? "GEOMETRY SOLVED" : "ANGULAR FALLBACK");
                 telemetry.addData("Aim Ready?", turret.isAimReady() ? "READY" : "ALIGNING");

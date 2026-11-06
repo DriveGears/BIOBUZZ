@@ -23,7 +23,7 @@ Official printed tag size:   3.25 inches / 82.55 mm
 
 The red scoring cluster is IDs `30` through `33`; the blue scoring cluster is
 IDs `42` through `45`. `TARGET_CLUSTER_FIRST_ID` selects between them. The live
-tuner's gamepad 2 Y button switches alliance without another deployment.
+tuner's gamepad 1 Y button switches alliance without another deployment.
 
 When two to four tags are visible, the subsystem fits their known horizontal
 positions to their measured Tx angles. This solves the cluster center and
@@ -354,6 +354,17 @@ During lateral driving:
 
 Leave odometry prediction disabled until vision-only prediction works. Then
 enable `USE_ODOMETRY_PREDICTION` and verify every odometry sign independently.
+
+With `USE_ODOMETRY_PREDICTION` enabled, vision measurements also anchor the
+CELL opening as a point in Pinpoint field coordinates. If the tags disappear,
+the subsystem recomputes the target bearing and distance from the current
+Pinpoint pose for up to `ODOMETRY_TARGET_HOLD_MS` (default 1000 ms). Telemetry
+changes the target source from `VISION` to `ODOMETRY` during this interval.
+After the timeout, the turret stops following the saved point.
+
+This compensates for robot translation and rotation during a short occlusion.
+It cannot observe motion of the BIOBUZZ CELL itself while the tags are hidden,
+which is why the fallback is deliberately time-limited.
 
 Use the live tuner's three odometry telemetry lines before enabling the blend:
 

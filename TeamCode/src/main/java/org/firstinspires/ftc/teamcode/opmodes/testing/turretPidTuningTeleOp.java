@@ -18,13 +18,13 @@ public class turretPidTuningTeleOp extends LinearOpMode {
             "Position Kp", "Velocity Kd", "Position Ki", "Velocity Kv",
             "Stiction", "Max integral", "Vision gain", "Aim tolerance",
             "Max turret power", "Odometry blend", "Fixed flight time",
-            "TOF per inch", "Shot delay"
+            "TOF per inch", "Shot delay", "Odo target hold ms"
     };
 
     private static final double[] PARAMETER_STEPS = {
             0.001, 0.0005, 0.0001, 0.0001,
             0.005, 0.005, 0.01, 0.05,
-            0.05, 0.05, 0.01, 0.0005, 0.01
+            0.05, 0.05, 0.01, 0.0005, 0.01, 100.0
     };
 
     private int selectedParameter;
@@ -205,6 +205,11 @@ public class turretPidTuningTeleOp extends LinearOpMode {
                 turretSubsystem2.FIXED_SHOT_DELAY_S = nonnegative(
                         turretSubsystem2.FIXED_SHOT_DELAY_S + amount);
                 break;
+            case 13:
+                turretSubsystem2.ODOMETRY_TARGET_HOLD_MS = clip(
+                        turretSubsystem2.ODOMETRY_TARGET_HOLD_MS + amount,
+                        0, 3000);
+                break;
             default:
                 break;
         }
@@ -221,14 +226,21 @@ public class turretPidTuningTeleOp extends LinearOpMode {
                 turretSubsystem2.TARGET_CLUSTER_FIRST_ID == 42 ? "BLUE SCORING" : "RED SCORING",
                 turretSubsystem2.TARGET_CLUSTER_FIRST_ID,
                 turretSubsystem2.TARGET_CLUSTER_FIRST_ID + 3);
-        telemetry.addData("Features", "prediction=%s, odometry=%s, latency=%s",
+        telemetry.addData("Features", "prediction=%s, odo track/blend=%s, latency=%s",
                 onOff(turretSubsystem2.PREDICTION_ENABLED),
                 onOff(turretSubsystem2.USE_ODOMETRY_PREDICTION),
                 onOff(turretSubsystem2.LATENCY_COMPENSATION_ENABLED));
         telemetry.addData("Target", "%s | tags %s | cluster geometry %s",
-                turret.hasTarget() ? "VISIBLE" : "lost",
+                turret.hasTarget() ? "VISION"
+                        : turret.isOdometryTrackingActive() ? "ODOMETRY" : "lost",
                 turret.getVisibleTagIds(),
                 turret.isClusterGeometryValid() ? "SOLVED" : "fallback");
+        telemetry.addData("Odo target", "pose=%s active=%s age=%.0f ms bearing=%+.1f dist=%.1f",
+                turret.isOdometryPoseValid() ? "valid" : "INVALID",
+                turret.isOdometryTrackingActive() ? "YES" : "no",
+                turret.getTargetAgeMs(),
+                turret.getOdometryTrackedBearingDeg(),
+                turret.getOdometryTrackedDistanceIn());
         telemetry.addData("PID", "err=%+.2f tk vel=%+.1f tk/s power=%+.3f I=%+.3f",
                 turret.getPositionErrorTicks(),
                 turret.getFilteredMotorVelocityTicksPerSecond(),
@@ -277,6 +289,7 @@ public class turretPidTuningTeleOp extends LinearOpMode {
             case 10: return turretSubsystem2.FIXED_FLIGHT_TIME_S;
             case 11: return turretSubsystem2.TOF_PER_INCH_S;
             case 12: return turretSubsystem2.FIXED_SHOT_DELAY_S;
+            case 13: return turretSubsystem2.ODOMETRY_TARGET_HOLD_MS;
             default: return Double.NaN;
         }
     }
