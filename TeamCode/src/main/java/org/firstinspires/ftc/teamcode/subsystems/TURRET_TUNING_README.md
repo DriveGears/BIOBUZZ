@@ -17,8 +17,13 @@ Subsystem 2 uses the official SDK geometry:
 Tag ID:                 42     43     44     45
 Horizontal offset:   -6.50  -2.75  +2.75  +6.50 inches
 Tag strip behind aim origin: 7.1874 inches
+Tag strip below aim origin: 5.622 inches
 Official printed tag size:   3.25 inches / 82.55 mm
 ```
+
+The red scoring cluster is IDs `30` through `33`; the blue scoring cluster is
+IDs `42` through `45`. `TARGET_CLUSTER_FIRST_ID` selects between them. The live
+tuner's gamepad 2 Y button switches alliance without another deployment.
 
 When two to four tags are visible, the subsystem fits their known horizontal
 positions to their measured Tx angles. This solves the cluster center and
@@ -81,7 +86,29 @@ With the current values, each limit is approximately:
 135 ticks / 2.04 ticks per degree = 66.2 degrees
 ```
 
-## Add tuning telemetry
+## Live tuning TeleOp
+
+Run `Turret PID Live Tuner` from the Driver Station. Gain changes take effect in
+the running OpMode immediately:
+
+- Gamepad 1 drives; hold right trigger for auto-aim.
+- Hold gamepad 1 Back and use D-pad left/right to move the turret manually.
+- Click both gamepad 1 sticks only when the turret is at its known center to
+  redefine encoder zero.
+- Gamepad 1 D-pad up/down selects a value and left/right changes it.
+- Hold gamepad 1 left bumper for one-tenth steps or right bumper for 10x steps.
+- Gamepad 1 A toggles prediction, B toggles odometry blending, X toggles latency
+  compensation, and Y selects the red/blue scoring cluster.
+
+The changes live in memory, including when another OpMode is selected, until
+the Robot Controller app restarts. Record the final values shown in telemetry
+and copy them into `turretSubsystem2.java` to make the tune the next deployed
+default.
+
+Keep prediction, odometry blending, and latency compensation off while tuning
+the stationary controller. Tune Kp and Kd first, then stiction, Ki, and Kv.
+
+## Additional tuning telemetry
 
 The subsystem already provides the required getters. Temporarily add this to
 [`biobuzzTestTeleOp.java`](../opmodes/testing/biobuzzTestTeleOp.java):
@@ -156,23 +183,23 @@ Do not tune gains until both direction tests pass.
 Use a stationary robot and tag. Start with:
 
 ```java
-public static final boolean PREDICTION_ENABLED = false;
-public static final boolean USE_ODOMETRY_PREDICTION = false;
-public static final double POSITION_KI = 0.0;
-public static final double VELOCITY_KV = 0.0;
-public static final double STICTION_POWER = 0.0;
+public static boolean PREDICTION_ENABLED = false;
+public static boolean USE_ODOMETRY_PREDICTION = false;
+public static double POSITION_KI = 0.0;
+public static double VELOCITY_KV = 0.0;
+public static double STICTION_POWER = 0.0;
 ```
 
-The checked-in `smooth-pid-v1` profile uses a conservative version of the
+The checked-in `live-tune-v2-cluster` profile uses a conservative version of the
 System 1 inner loop:
 
 ```java
-POSITION_KP = 0.040;
+POSITION_KP = 0.045;
 VELOCITY_KD = 0.0040;
-VELOCITY_KV = 0.0005;
-POSITION_KI = 0.0010;
+VELOCITY_KV = 0.0015;
+POSITION_KI = 0.0005;
 MAX_INTEGRAL_POWER = 0.025;
-STICTION_POWER = 0.030;
+STICTION_POWER = 0.050;
 MAX_TURRET_POWER = 0.40;
 VISION_CORRECTION_GAIN = 0.12;
 ```
@@ -233,15 +260,15 @@ The current `0.12` prioritizes smoothness. Try changes such as `0.12`, `0.16`,
 and `0.20`, testing after each change.
 
 After aiming is reliable, set `AIM_STABLE_FRAMES` to approximately 3 to 5. The
-current value of 1 declares the turret ready after one acceptable vision frame.
+current value of 2 declares the turret ready after two acceptable vision frames.
 
 ## 6. Calibrate per-tag optical corrections
 
-The entries in `TAG_AIM_OFFSETS_DEG` must use the same order as
-`TARGET_TAG_IDS`:
+The entries in `TAG_AIM_OFFSETS_DEG` use ascending ID order within the selected
+four-tag cluster. For the default blue scoring cluster:
 
 ```java
-public static final int[] TARGET_TAG_IDS = {42, 43, 44, 45};
+public static int TARGET_CLUSTER_FIRST_ID = 42;
 ```
 
 These offsets now correct small per-tag optical or installation biases before
@@ -273,7 +300,7 @@ Measure these values from the camera lens or optical center:
 - The center height of each tag
 - The actual downward camera angle
 
-Tag heights must follow the same order as `TARGET_TAG_IDS`:
+Tag heights follow ascending ID order within the selected cluster:
 
 ```java
 public static final double[] TAG_HEIGHTS_IN = {
@@ -327,6 +354,20 @@ During lateral driving:
 
 Leave odometry prediction disabled until vision-only prediction works. Then
 enable `USE_ODOMETRY_PREDICTION` and verify every odometry sign independently.
+
+Use the live tuner's three odometry telemetry lines before enabling the blend:
+
+1. Push the robot forward: `forward` must be positive and `left` near zero.
+2. Push it left: `left` must be positive and `forward` near zero.
+3. Rotate counter-clockwise: `turn` must be positive.
+4. With a stationary visible target, drive in simple forward, left, and turning
+   motions. The vision and odometry bearing/range rates should have the same
+   sign and similar magnitude after the vision filters settle.
+
+If a raw direction is reversed, change only its corresponding
+`ODOMETRY_FORWARD_SIGN`, `ODOMETRY_LEFT_SIGN`, or `ODOMETRY_HEADING_SIGN`.
+If all raw axes are correct but bearing rate is reversed, check
+`ODOMETRY_BEARING_SIGN`. Do not enable odometry blending until these tests pass.
 
 ## Acceptance checks
 

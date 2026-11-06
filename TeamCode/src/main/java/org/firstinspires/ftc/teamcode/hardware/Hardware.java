@@ -2,6 +2,7 @@ package org.firstinspires.ftc.teamcode.hardware;
 
 import com.qualcomm.hardware.gobilda.GoBildaPinpointDriver;
 import com.qualcomm.hardware.limelightvision.Limelight3A;
+import com.qualcomm.hardware.lynx.LynxModule;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 
@@ -24,6 +25,13 @@ public class Hardware {
     public Limelight3A limelight = null;
 
     public Hardware(HardwareMap hwMap) {
+        // Always restore live reads in case an earlier OpMode left the hubs in
+        // MANUAL bulk-caching mode without clearing them each loop.
+        for (LynxModule hub : hwMap.getAll(LynxModule.class)) {
+            hub.setBulkCachingMode(LynxModule.BulkCachingMode.AUTO);
+            hub.clearBulkCache();
+        }
+
         this.lf = hwMap.get(DcMotorEx.class, Specifications.FTLF_MOTOR);
         this.rf = hwMap.get(DcMotorEx.class, Specifications.FTRT_MOTOR);
         this.lb = hwMap.get(DcMotorEx.class, Specifications.BKLF_MOTOR);
@@ -32,7 +40,7 @@ public class Hardware {
         this.intake = hwMap.get(DcMotorEx.class, Specifications.INTAKE);
         this.transfer = hwMap.get(DcMotorEx.class, Specifications.TRANSFER);
         this.turret = hwMap.get(DcMotorEx.class, Specifications.TURRET);
-//        this.limelight = hwMap.get(Limelight3A.class,Specifications.LIMELIGHT);
+        this.limelight = hwMap.get(Limelight3A.class,Specifications.LIMELIGHT);
         this.odo = hwMap.get(GoBildaPinpointDriver.class,Specifications.ODO);
 
         lf.setDirection(DcMotorEx.Direction.REVERSE);
@@ -53,7 +61,9 @@ public class Hardware {
         transfer.setZeroPowerBehavior(DcMotorEx.ZeroPowerBehavior.BRAKE);
         turret.setZeroPowerBehavior(DcMotorEx.ZeroPowerBehavior.BRAKE);
 
-        turret.setMode(DcMotorEx.RunMode.RUN_USING_ENCODER);
+        // Position and velocity remain readable in this mode. The turret uses
+        // its own software PID, so do not layer the hub's velocity PID on top.
+        turret.setMode(DcMotorEx.RunMode.RUN_WITHOUT_ENCODER);
         setTurretCurrentPositionAsZero();
     }
 

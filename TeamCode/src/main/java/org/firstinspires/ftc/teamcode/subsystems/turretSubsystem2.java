@@ -5,7 +5,6 @@ import com.qualcomm.hardware.limelightvision.LLResultTypes;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
 import com.qualcomm.robotcore.util.ElapsedTime;
 
-import org.firstinspires.ftc.robotcore.external.navigation.AngleUnit;
 import org.firstinspires.ftc.robotcore.external.navigation.DistanceUnit;
 import org.firstinspires.ftc.robotcore.external.navigation.UnnormalizedAngleUnit;
 import org.firstinspires.ftc.teamcode.hardware.Hardware;
@@ -22,13 +21,13 @@ public class turretSubsystem2 {
     // ========================= VALUES TO CALIBRATE =========================
 
     /** Displayed by the test TeleOp so the deployed tuning profile is verifiable. */
-    public static final String TUNE_VERSION = "smooth-pid-v1-cluster";
+    public static final String TUNE_VERSION = "live-tune-v2-cluster";
 
     /** Limelight AprilTag pipeline number. */
     public static final int APRILTAG_PIPELINE = 1;
 
-    /** Target AprilTag cluster IDs. */
-    public static final int[] TARGET_TAG_IDS = {42, 43, 44, 45};
+    /** First ID of the scoring cluster: red is 30, blue is 42. */
+    public static int TARGET_CLUSTER_FIRST_ID = 42;
 
     /** Per-tag optical corrections, in the same order. Positive subtracts from measured Tx. */
     public static final double[] TAG_AIM_OFFSETS_DEG = {};
@@ -37,18 +36,18 @@ public class turretSubsystem2 {
     public static final double[] TAG_HEIGHTS_IN = {};
 
     /** Encoder ticks per degree (System 1 calibrated value). */
-    public static final double TICKS_PER_DEGREE = 2.04;
+    public static double TICKS_PER_DEGREE = 2.04;
 
     /** Flip this sign if the turret corrects away from the target. */
-    public static final double AIM_DIRECTION_SIGN = 1.0;
+    public static double AIM_DIRECTION_SIGN = 1.0;
 
     /** Flip this sign if motor power and encoder tick direction disagree. */
-    public static final double MOTOR_DIRECTION_SIGN = 1.0;
+    public static double MOTOR_DIRECTION_SIGN = 1.0;
 
     /** Encoder safety limits (System 1 limits). */
-    public static final int MIN_TURRET_TICKS = -135;
-    public static final int MAX_TURRET_TICKS = 135;
-    public static final double MAX_TURRET_POWER = 0.40;
+    public static int MIN_TURRET_TICKS = -135;
+    public static int MAX_TURRET_TICKS = 135;
+    public static double MAX_TURRET_POWER = 0.40;
 
     /** Camera geometry for calculating horizontal floor distance. */
     public static final double CAMERA_HEIGHT_IN = 48.0;
@@ -63,39 +62,41 @@ public class turretSubsystem2 {
             -6.50, -2.75, 2.75, 6.50
     };
     public static final double CLUSTER_AIM_POINT_FORWARD_OF_TAGS_IN = 7.1874;
+    /** Official SDK Z offset: tag centers are this far below the opening origin. */
+    public static final double CLUSTER_AIM_POINT_ABOVE_TAGS_IN = 5.622;
 
     /** Conservative smooth baseline, used with velocity and proximity smoothing below. */
-    public static final double POSITION_KP = 0.045;
-    public static final double VELOCITY_KD = 0.0040;
-    public static final double VELOCITY_KV = 0.0015;
-    public static final double POSITION_KI = 0.0005;
-    public static final double MAX_INTEGRAL_POWER = 0.025;
-    public static final double STICTION_POWER = 0.050;
+    public static double POSITION_KP = 0.045;
+    public static double VELOCITY_KD = 0.0040;
+    public static double VELOCITY_KV = 0.0015;
+    public static double POSITION_KI = 0.0005;
+    public static double MAX_INTEGRAL_POWER = 0.025;
+    public static double STICTION_POWER = 0.050;
 
     /** Lower values trade reaction speed for less vision-induced twitching. */
-    public static final double VISION_CORRECTION_GAIN = 0.12;
-    public static final double AIM_TOLERANCE_DEG = 0.40;
-    public static final int AIM_STABLE_FRAMES = 2;
+    public static double VISION_CORRECTION_GAIN = 0.12;
+    public static double AIM_TOLERANCE_DEG = 0.40;
+    public static int AIM_STABLE_FRAMES = 2;
 
     /** System 1 leaves latency compensation off for smoother initial tuning. */
-    public static final boolean LATENCY_COMPENSATION_ENABLED = false;
+    public static boolean LATENCY_COMPENSATION_ENABLED = false;
 
     /** Motion prediction: tune flight time after basic stationary aiming works. */
-    public static final boolean PREDICTION_ENABLED = false;
-    public static final double FIXED_FLIGHT_TIME_S = 0.12;
-    public static final double TOF_PER_INCH_S = 0.0055;
-    public static final double FIXED_SHOT_DELAY_S = 0.06;
-    public static final double MAX_PREDICTION_TIME_S = 1.20;
-    public static final double MAX_ANGLE_LEAD_DEG = 12.0;
-    public static final double MAX_DISTANCE_LEAD_IN = 36.0;
+    public static boolean PREDICTION_ENABLED = false;
+    public static double FIXED_FLIGHT_TIME_S = 0.12;
+    public static double TOF_PER_INCH_S = 0.0055;
+    public static double FIXED_SHOT_DELAY_S = 0.06;
+    public static double MAX_PREDICTION_TIME_S = 1.20;
+    public static double MAX_ANGLE_LEAD_DEG = 12.0;
+    public static double MAX_DISTANCE_LEAD_IN = 36.0;
 
     /** Odometry prediction settings. */
-    public static final boolean USE_ODOMETRY_PREDICTION = false;
-    public static final double ODOMETRY_RATE_BLEND = 0.70;
-    public static final double ODOMETRY_FORWARD_SIGN = 1.0;
-    public static final double ODOMETRY_LEFT_SIGN = 1.0;
-    public static final double ODOMETRY_HEADING_SIGN = 1.0;
-    public static final double ODOMETRY_BEARING_SIGN = -1.0;
+    public static boolean USE_ODOMETRY_PREDICTION = false;
+    public static double ODOMETRY_RATE_BLEND = 0.70;
+    public static double ODOMETRY_FORWARD_SIGN = 1.0;
+    public static double ODOMETRY_LEFT_SIGN = 1.0;
+    public static double ODOMETRY_HEADING_SIGN = 1.0;
+    public static double ODOMETRY_BEARING_SIGN = -1.0;
 
     // ========================= NORMAL CONSTANTS =========================
 
@@ -129,6 +130,7 @@ public class turretSubsystem2 {
     private boolean autoAimEnabled;
     private double manualPower;
     private int selectedTagId = -1;
+    private int activeTargetClusterFirstId = TARGET_CLUSTER_FIRST_ID;
     private String visibleTagIds = "none";
     private int visibleTagCount;
     private boolean clusterGeometryValid;
@@ -224,6 +226,13 @@ public class turretSubsystem2 {
         double dt = clamp(dtSeconds, 0.001, 0.100);
         double nowMs = clock.milliseconds();
         int currentTicks = robot.getTurretPositionTicks();
+        if (activeTargetClusterFirstId != TARGET_CLUSTER_FIRST_ID) {
+            activeTargetClusterFirstId = TARGET_CLUSTER_FIRST_ID;
+            selectedTagId = -1;
+            targetVisible = false;
+            targetTicksInitialized = false;
+            resetMeasurementHistory();
+        }
         updateFilteredMotorVelocity();
 
         updateOdometry();
@@ -278,11 +287,15 @@ public class turretSubsystem2 {
                 + result.getTargetingLatency() + EXTRA_LATENCY_MS;
         double captureTimeMs = nowMs - lastLatencyMs;
         double ticksAtCapture = encoderTicksAt(captureTimeMs);
+        // A positive turret movement reduces a same-direction image error.
         double turretMovementDeg = LATENCY_COMPENSATION_ENABLED
-                ? (currentTicks - ticksAtCapture) / TICKS_PER_DEGREE : 0;
+                ? -(currentTicks - ticksAtCapture)
+                        / (AIM_DIRECTION_SIGN * TICKS_PER_DEGREE) : 0;
         double horizontalErrorDeg = filteredTxDeg;
 
-        double bearingAtCaptureDeg = horizontalErrorDeg - ticksAtCapture / TICKS_PER_DEGREE;
+        // Robot-relative bearing = camera error + physical turret bearing.
+        double bearingAtCaptureDeg = horizontalErrorDeg
+                + ticksAtCapture / (AIM_DIRECTION_SIGN * TICKS_PER_DEGREE);
         lastRobotBearingDeg = bearingAtCaptureDeg;
         updateTargetRates(captureTimeMs, bearingAtCaptureDeg);
         updatePrediction(lastLatencyMs);
@@ -370,24 +383,19 @@ public class turretSubsystem2 {
         if (robot.odo == null) return;
         robot.odo.update();
 
-        double fieldVelocityX = robot.odo.getVelX(DistanceUnit.INCH);
-        double fieldVelocityY = robot.odo.getVelY(DistanceUnit.INCH);
-        double headingRad = robot.odo.getHeading(AngleUnit.RADIANS);
+        double forwardVelocity = robot.odo.getVelX(DistanceUnit.INCH);
+        double leftVelocity = robot.odo.getVelY(DistanceUnit.INCH);
         double headingRateDegPerSec = robot.odo.getHeadingVelocity(
                 UnnormalizedAngleUnit.DEGREES);
 
-        odometryRateValid = Double.isFinite(fieldVelocityX)
-                && Double.isFinite(fieldVelocityY)
-                && Double.isFinite(headingRad)
+        odometryRateValid = Double.isFinite(forwardVelocity)
+                && Double.isFinite(leftVelocity)
                 && Double.isFinite(headingRateDegPerSec);
         if (!odometryRateValid) return;
 
-        double cosHeading = Math.cos(headingRad);
-        double sinHeading = Math.sin(headingRad);
-        robotForwardVelocityInPerSec = ODOMETRY_FORWARD_SIGN
-                * (fieldVelocityX * cosHeading + fieldVelocityY * sinHeading);
-        robotLeftVelocityInPerSec = ODOMETRY_LEFT_SIGN
-                * (-fieldVelocityX * sinHeading + fieldVelocityY * cosHeading);
+        // Pinpoint X/Y velocity is already robot-relative: X forward, Y left.
+        robotForwardVelocityInPerSec = ODOMETRY_FORWARD_SIGN * forwardVelocity;
+        robotLeftVelocityInPerSec = ODOMETRY_LEFT_SIGN * leftVelocity;
         robotHeadingRateRadPerSec = ODOMETRY_HEADING_SIGN
                 * Math.toRadians(headingRateDegPerSec);
     }
@@ -600,7 +608,8 @@ public class turretSubsystem2 {
             double slope = xVariance > 1e-6 ? covariance / xVariance : 0;
             if (slope > 1.0 / MAX_DISTANCE_IN) {
                 tagPlaneDepthIn = 1.0 / slope;
-                if (tagPlaneDepthIn > CLUSTER_AIM_POINT_FORWARD_OF_TAGS_IN + 1.0
+                if (tagPlaneDepthIn > CLUSTER_AIM_POINT_FORWARD_OF_TAGS_IN
+                        + CLUSTER_AIM_POINT_ABOVE_TAGS_IN + 1.0
                         && tagPlaneDepthIn < MAX_DISTANCE_IN) {
                     clusterLateralIn = (meanTanTx - slope * meanX)
                             * tagPlaneDepthIn;
@@ -628,7 +637,8 @@ public class turretSubsystem2 {
                     ? depthSum / depthCount : lastClusterTagPlaneDepthIn;
 
             if (Double.isFinite(tagPlaneDepthIn)
-                    && tagPlaneDepthIn > CLUSTER_AIM_POINT_FORWARD_OF_TAGS_IN + 1.0) {
+                    && tagPlaneDepthIn > CLUSTER_AIM_POINT_FORWARD_OF_TAGS_IN
+                            + CLUSTER_AIM_POINT_ABOVE_TAGS_IN + 1.0) {
                 double lateralSum = 0;
                 for (LLResultTypes.FiducialResult tag : tags) {
                     double correctedTxDeg = tag.getTargetXDegrees()
@@ -647,26 +657,27 @@ public class turretSubsystem2 {
         double centerTxDeg;
         double horizontalDistanceIn = Double.NaN;
         if (clusterGeometryValid) {
-            double aimPointDepthIn = tagPlaneDepthIn
-                    - CLUSTER_AIM_POINT_FORWARD_OF_TAGS_IN;
+            // SDK cluster coordinates put each tag forward and below the CELL
+            // opening origin. Project that 3-D offset into the pitched camera.
+            double cameraPitchRad = Math.toRadians(CAMERA_DOWN_ANGLE_DEG);
+            double tagToOriginDepthIn = CLUSTER_AIM_POINT_FORWARD_OF_TAGS_IN
+                    * Math.cos(cameraPitchRad)
+                    + CLUSTER_AIM_POINT_ABOVE_TAGS_IN * Math.sin(cameraPitchRad);
+            double tagToOriginVerticalIn = CLUSTER_AIM_POINT_FORWARD_OF_TAGS_IN
+                    * Math.sin(cameraPitchRad)
+                    - CLUSTER_AIM_POINT_ABOVE_TAGS_IN * Math.cos(cameraPitchRad);
+            double aimPointDepthIn = tagPlaneDepthIn - tagToOriginDepthIn;
             centerTxDeg = Math.toDegrees(
                     Math.atan2(clusterLateralIn, aimPointDepthIn));
 
-            // Convert the geometry-solved optical range to an approximate floor
-            // distance using the calibrated camera pitch. This avoids relying on
-            // a fixed sticker height on the moving BIOBUZZ CELL.
-            double opticalHorizontalRangeIn = Math.hypot(
-                    aimPointDepthIn, clusterLateralIn);
-            double opticalElevationRad = Math.toRadians(averageTyDeg);
-            double cosOpticalElevation = Math.cos(opticalElevationRad);
-            if (Math.abs(cosOpticalElevation) > 0.1) {
-                double slantRangeIn = opticalHorizontalRangeIn
-                        / cosOpticalElevation;
-                double fieldElevationRad = Math.toRadians(
-                        averageTyDeg - CAMERA_DOWN_ANGLE_DEG);
-                horizontalDistanceIn = Math.abs(
-                        slantRangeIn * Math.cos(fieldElevationRad));
-            }
+            double tagVerticalOpticalIn = tagPlaneDepthIn
+                    * Math.tan(Math.toRadians(averageTyDeg));
+            double aimPointVerticalOpticalIn = tagVerticalOpticalIn
+                    - tagToOriginVerticalIn;
+            double aimPointForwardIn = aimPointDepthIn * Math.cos(cameraPitchRad)
+                    + aimPointVerticalOpticalIn * Math.sin(cameraPitchRad);
+            horizontalDistanceIn = Math.hypot(
+                    aimPointForwardIn, clusterLateralIn);
         } else {
             // Safe startup fallback if Limelight 3D is disabled and only one tag
             // has ever been visible. Multiple visible tags use their angular mean.
@@ -714,22 +725,12 @@ public class turretSubsystem2 {
     }
 
     private boolean isAllowedTag(int id) {
-        if (TARGET_TAG_IDS.length == 0) return true;
-        for (int allowedId : TARGET_TAG_IDS) {
-            if (allowedId == id) return true;
-        }
-        return false;
+        return id >= TARGET_CLUSTER_FIRST_ID && id < TARGET_CLUSTER_FIRST_ID + 4;
     }
 
     private int indexOfTag(int id) {
-        for (int i = 0; i < TARGET_TAG_IDS.length; i++) {
-            if (TARGET_TAG_IDS[i] == id) return indexForTag(i);
-        }
-        return -1;
-    }
-
-    private int indexForTag(int i) {
-        return i;
+        int index = id - TARGET_CLUSTER_FIRST_ID;
+        return index >= 0 && index < 4 ? index : -1;
     }
 
     private double aimOffsetForTag(int id) {
@@ -832,6 +833,9 @@ public class turretSubsystem2 {
     public double getOdometryRangeRateInPerSec() { return odometryRangeRateInPerSec; }
     public double getRobotForwardVelocityInPerSec() { return robotForwardVelocityInPerSec; }
     public double getRobotLeftVelocityInPerSec() { return robotLeftVelocityInPerSec; }
+    public double getRobotHeadingRateDegPerSec() {
+        return Math.toDegrees(robotHeadingRateRadPerSec);
+    }
     public boolean isOdometryRateValid() { return odometryRateValid; }
     public double getPredictionTimeS() { return predictionTimeS; }
     public double getLastVisionErrorDeg() { return lastVisionErrorDeg; }
