@@ -12,7 +12,7 @@ import org.firstinspires.ftc.teamcode.subsystems.turretSubsystem2;
 public class turretPidTuningTeleOp extends LinearOpMode {
 
     private static final double DRIVE_SPEED = 0.55;
-    private static final double MANUAL_TURRET_POWER = 0.18;
+    private static final double MANUAL_TURRET_POWER = 0.25;
 
     private static final String[] PARAMETER_NAMES = {
             "Position Kp", "Velocity Kd", "Position Ki", "Velocity Kv",

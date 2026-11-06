@@ -36,7 +36,7 @@ public class turretSubsystem2 {
     public static final double[] TAG_HEIGHTS_IN = {};
 
     /** Encoder ticks per degree (System 1 calibrated value). */
-    public static double TICKS_PER_DEGREE = 2.04;
+    public static double TICKS_PER_DEGREE = 1.79;
 
     /** Flip this sign if the turret corrects away from the target. */
     public static double AIM_DIRECTION_SIGN = 1.0;
@@ -45,8 +45,8 @@ public class turretSubsystem2 {
     public static double MOTOR_DIRECTION_SIGN = 1.0;
 
     /** Encoder safety limits (System 1 limits). */
-    public static int MIN_TURRET_TICKS = -135;
-    public static int MAX_TURRET_TICKS = 135;
+    public static int MIN_TURRET_TICKS = -205;
+    public static int MAX_TURRET_TICKS = 71;
     public static double MAX_TURRET_POWER = 0.40;
 
     /** Camera geometry for calculating horizontal floor distance. */
