@@ -4,9 +4,11 @@ import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
+import com.qualcomm.robotcore.hardware.DcMotorSimple;
 import com.qualcomm.robotcore.util.ElapsedTime;
 
 import org.firstinspires.ftc.teamcode.hardware.Hardware;
+import org.firstinspires.ftc.teamcode.hardware.Specifications;
 
 @TeleOp(name = "Outtake & Transfer Encoder Test", group = "Testing")
 public class outtakeTest extends LinearOpMode {
@@ -46,24 +48,23 @@ public class outtakeTest extends LinearOpMode {
 
     @Override
     public void runOpMode() {
-        Hardware.resetInstance();
-        Hardware robot = Hardware.getInstance(hardwareMap);
-        DcMotorEx flywheel = robot.outtake;
-        DcMotorEx intake = robot.intake;
-        DcMotorEx transfer = robot.transfer;
+        DcMotorEx flywheel = hardwareMap.get(DcMotorEx.class, "outtake");
+//        DcMotorEx intake = hardwareMap.get(DcMotorEx.class, "intake");
+//        DcMotorEx transfer = hardwareMap.get(DcMotorEx.class, "transfer");
 
         if (flywheel != null) {
             flywheel.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
             flywheel.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
+            flywheel.setDirection(DcMotorSimple.Direction.REVERSE);
         }
-        if (intake != null) {
-            intake.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
-            intake.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
-        }
-        if (transfer != null) {
-            transfer.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
-            transfer.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
-        }
+//        if (intake != null) {
+//            intake.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
+//            intake.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
+//        }
+//        if (transfer != null) {
+//            transfer.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
+//            transfer.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
+//        }
 
         telemetry.addLine("Outtake & Transfer Encoder Test Ready");
         telemetry.update();
@@ -83,10 +84,10 @@ public class outtakeTest extends LinearOpMode {
             double strafe = applyDeadband(gamepad1.left_stick_x) * 1.10 * 0.75;
             double turn = applyDeadband(gamepad1.right_stick_x) * 0.75;
             double denominator = Math.max(Math.abs(forward) + Math.abs(strafe) + Math.abs(turn), 1.0);
-            robot.lf.setPower((forward + strafe + turn) / denominator);
-            robot.lb.setPower((forward - strafe + turn) / denominator);
-            robot.rf.setPower((forward - strafe - turn) / denominator);
-            robot.rb.setPower((forward + strafe - turn) / denominator);
+//            robot.lf.setPower((forward + strafe + turn) / denominator);
+//            robot.lb.setPower((forward - strafe + turn) / denominator);
+//            robot.rf.setPower((forward - strafe - turn) / denominator);
+//            robot.rb.setPower((forward + strafe - turn) / denominator);
 
             boolean currentDpadUp = gamepad1.dpad_up;
             boolean currentDpadDown = gamepad1.dpad_down;
@@ -173,29 +174,29 @@ public class outtakeTest extends LinearOpMode {
 
             // Transfer PIDF
             double targetTransferTPS = transferOn ? (targetTransferRPM * TICKS_PER_REV / 60.0) : 0.0;
-            double actualTransferTPS = (transfer != null) ? transfer.getVelocity() : 0.0;
-            double actualTransferRPM = (actualTransferTPS * 60.0) / TICKS_PER_REV;
-            double errorTransferTPS = targetTransferTPS - actualTransferTPS;
+//            double actualTransferTPS = (transfer != null) ? transfer.getVelocity() : 0.0;
+//            double actualTransferRPM = (actualTransferTPS * 60.0) / TICKS_PER_REV;
+//            double errorTransferTPS = targetTransferTPS - actualTransferTPS;
 
-            double transferMotorPower = 0.0;
-            if (transferOn) {
-                double pTermT = KP * errorTransferTPS;
-                transferIntegralSum += errorTransferTPS * dt;
-                transferIntegralSum = Math.max(-MAX_INTEGRAL_SUM, Math.min(MAX_INTEGRAL_SUM, transferIntegralSum));
-                double iTermT = KI * transferIntegralSum;
-                double derivativeT = (errorTransferTPS - transferLastError) / dt;
-                double dTermT = KD * derivativeT;
-                double fTermT = KF * targetTransferTPS;
-
-                transferMotorPower = pTermT + iTermT + dTermT + fTermT;
-                transferMotorPower = Math.max(-1.0, Math.min(1.0, transferMotorPower));
-            } else {
-                resetTransferPID();
-            }
-            transferLastError = errorTransferTPS;
+//            double transferMotorPower = 0.0;
+//            if (transferOn) {
+//                double pTermT = KP * errorTransferTPS;
+//                transferIntegralSum += errorTransferTPS * dt;
+//                transferIntegralSum = Math.max(-MAX_INTEGRAL_SUM, Math.min(MAX_INTEGRAL_SUM, transferIntegralSum));
+//                double iTermT = KI * transferIntegralSum;
+//                double derivativeT = (errorTransferTPS - transferLastError) / dt;
+//                double dTermT = KD * derivativeT;
+//                double fTermT = KF * targetTransferTPS;
+//
+//                transferMotorPower = pTermT + iTermT + dTermT + fTermT;
+//                transferMotorPower = Math.max(-1.0, Math.min(1.0, transferMotorPower));
+//            } else {
+//                resetTransferPID();
+//            }
+//            transferLastError = errorTransferTPS;
 
             if (flywheel != null) flywheel.setPower(motorPower);
-            if (transfer != null) transfer.setPower(transferMotorPower);
+//            if (transfer != null) transfer.setPower(transferMotorPower);
 
             telemetry.addData("Tuning Focus (X)", adjustingTransfer ? "--> TRANSFER RPM" : "--> OUTTAKE RPM");
             telemetry.addData("Outtake Toggle (A)", flywheelOn ? "ON (Running)" : "OFF");
@@ -206,10 +207,10 @@ public class outtakeTest extends LinearOpMode {
             telemetry.addData("Outtake Actual RPM", "%.0f RPM", actualRPM);
             telemetry.addData("Outtake Power", "%.1f%%", motorPower * 100.0);
 
-            telemetry.addLine();
-            telemetry.addData("Transfer Target RPM", "%.0f RPM", targetTransferRPM);
-            telemetry.addData("Transfer Actual RPM", "%.0f RPM", actualTransferRPM);
-            telemetry.addData("Transfer Power", "%.1f%%", transferMotorPower * 100.0);
+//            telemetry.addLine();
+//            telemetry.addData("Transfer Target RPM", "%.0f RPM", targetTransferRPM);
+//            telemetry.addData("Transfer Actual RPM", "%.0f RPM", actualTransferRPM);
+//            telemetry.addData("Transfer Power", "%.1f%%", transferMotorPower * 100.0);
 
             telemetry.addLine();
             telemetry.addLine("=== CONTROLS ===");
@@ -223,11 +224,11 @@ public class outtakeTest extends LinearOpMode {
         }
 
         if (flywheel != null) flywheel.setPower(0);
-        if (transfer != null) transfer.setPower(0);
-        robot.lf.setPower(0);
-        robot.lb.setPower(0);
-        robot.rf.setPower(0);
-        robot.rb.setPower(0);
+//        if (transfer != null) transfer.setPower(0);
+//        robot.lf.setPower(0);
+//        robot.lb.setPower(0);
+//        robot.rf.setPower(0);
+//        robot.rb.setPower(0);
     }
 
     private void resetPID() {

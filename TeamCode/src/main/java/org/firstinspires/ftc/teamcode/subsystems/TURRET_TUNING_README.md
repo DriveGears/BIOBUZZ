@@ -1,394 +1,185 @@
-# Turret Tuning Guide
+# Turret Setup and TeleOp Integration
 
-This guide applies to [`turretSubsystem2.java`](turretSubsystem2.java). Tune the
-turret in the order below. Keep both `PREDICTION_ENABLED` and
-`USE_ODOMETRY_PREDICTION` set to `false` until stationary aiming is reliable.
+The turret gains and limits are now fixed in
+[`turretSubsystem2.java`](turretSubsystem2.java). The separate PID tuning
+OpMode has been removed.
 
-## BIOBUZZ AprilTag cluster targeting
+## Before INIT
 
-BIOBUZZ uses four-tag clusters. IDs `42`, `43`, `44`, and `45` are the blue
-scoring-side CELL cluster. FTC SDK 12 defines the cluster origin at the center
-of the CELL opening so that it is the useful aiming point, rather than the
-center of any individual printed tag.
+- Physically center the turret before pressing INIT. INIT records that position
+  as encoder zero; this is not automatic homing.
+- Keep the turret clear of wires and mechanical stops.
+- The blue target cluster is AprilTag IDs 42-45. For red, set
+  `TARGET_CLUSTER_FIRST_ID` to `30` before constructing the subsystem.
 
-Subsystem 2 uses the official SDK geometry:
+## Turret tuning
 
-```text
-Tag ID:                 42     43     44     45
-Horizontal offset:   -6.50  -2.75  +2.75  +6.50 inches
-Tag strip behind aim origin: 7.1874 inches
-Tag strip below aim origin: 5.622 inches
-Official printed tag size:   3.25 inches / 82.55 mm
-```
+The live tuning OpMode is no longer needed. If the mechanism changes, edit the
+constants at the top of `turretSubsystem2.java`, rebuild, and test one stage at
+a time. Remove projectiles while tuning and be ready to stop the OpMode.
 
-The red scoring cluster is IDs `30` through `33`; the blue scoring cluster is
-IDs `42` through `45`. `TARGET_CLUSTER_FIRST_ID` selects between them. The live
-tuner's gamepad 1 Y button switches alliance without another deployment.
+### 1. Encoder scale and directions
 
-When two to four tags are visible, the subsystem fits their known horizontal
-positions to their measured Tx angles. This solves the cluster center and
-depth without shifting toward whichever subset happens to be visible. When
-only one tag is visible, it uses the Limelight 3D range or the most recent
-multi-tag depth.
+1. Mark the centered position and record the encoder count.
+2. Manually rotate the turret through a measured angle, preferably 45 or 60
+   degrees.
+3. Calculate `TICKS_PER_DEGREE = abs(tick change) / measured angle`.
+4. Repeat in both directions and average the results.
+5. Apply positive manual power. If encoder ticks decrease, change
+   `MOTOR_DIRECTION_SIGN`.
+6. Place a tag slightly off-center and briefly enable auto-aim. If the turret
+   moves away from it, immediately stop and change `AIM_DIRECTION_SIGN`.
 
-When that geometry solution is valid, shooter distance is derived from the
-known tag spacing, average Ty, and calibrated camera pitch. The fixed tag-height
-formula is used only as a fallback. This matters because the BIOBUZZ cluster is
-mounted on a moving CELL and the official aim origin is not at a printed tag.
+### 2. Soft limits
 
-Configure the Limelight AprilTag pipeline as follows:
+Using low manual power, approach each safe travel extreme without touching a
+hard stop. Leave a 5-10 tick safety margin and enter the positions as
+`MIN_TURRET_TICKS` and `MAX_TURRET_TICKS`. Verify that manual power cannot move
+past either limit.
 
-- Family: AprilTag Classic 36h11
-- Marker size: `82.55 mm`
-- ID filter: `42,43,44,45`
-- Enable 3D pose calculation for reliable one-tag recovery
-- Use the highest practical resolution and a fixed, low exposure
+### 3. PID tuning
 
-Driver Station telemetry reports the number and IDs of visible tags. `Cluster
-Center: GEOMETRY SOLVED` means the corrected CELL-opening aim point is active.
-`ANGULAR FALLBACK` means there was not enough geometry or 3D range data; this
-normally occurs when only one tag has ever been visible and Limelight 3D is
-disabled.
-
-The old `DEFAULT_TAG_HEIGHT_IN = 14.5` is not an official BIOBUZZ CELL
-measurement. The official cluster origin is at the CELL opening center, while
-the stickers sit elsewhere on the moving CELL. Do not finalize shooter distance
-from the height formula until `CAMERA_HEIGHT_IN`, camera pitch, and the desired
-vertical aim point have been measured on the assembled robot and field element.
-
-## Safety and encoder zero
-
-- Remove or disable projectiles while tuning.
-- Keep hands, wires, and tools outside the turret's travel.
-- Begin with low manual power and be ready to stop the OpMode.
-- Do not drive against a mechanical stop.
-
-The soft limits assume encoder position `0` is the mechanical center. The
-current [`Hardware.java`](../hardware/Hardware.java) captures the raw turret
-encoder count during INIT and exposes a position relative to that count. Both
-turret subsystems use this relative position, so encoder counts retained from a
-previous OpMode can no longer falsely hold the turret at one soft limit.
-
-**Physically center the turret before pressing INIT.** The software zero is not
-a homing system and cannot know the turret's physical angle. Starting an OpMode
-with the turret off-center shifts both soft limits and can allow a mechanical
-collision. A competition-ready system should use a repeatable homing procedure,
-limit switch, or absolute encoder.
-
-If the turret was not centered during INIT, release auto-aim, manually place it
-at the intended forward/center position, and click both gamepad stick buttons
-together. `biobuzzTestTeleOp` will redefine that position as `0` and clear the
-turret controller state. Only use this control at the known center position.
-
-With the current values, each limit is approximately:
+The turret uses a software PID-style position controller. Its main output is:
 
 ```text
-135 ticks / 2.04 ticks per degree = 66.2 degrees
+power = Kp * position error
+      + Kd * velocity error
+      + Ki accumulated position error
+      + Kv * target velocity
+      + stiction compensation
 ```
 
-## Live tuning TeleOp
+`VELOCITY_KD` acts on target velocity minus measured motor velocity, so it is a
+velocity-damping term rather than a raw derivative of position error. The
+integral contribution is limited by `MAX_INTEGRAL_POWER` to reduce windup.
 
-Run `Turret PID Live Tuner` from the Driver Station. Gain changes take effect in
-the running OpMode immediately:
-
-- Gamepad 1 drives; hold right trigger for auto-aim.
-- Hold gamepad 1 Back and use D-pad left/right to move the turret manually.
-- Click both gamepad 1 sticks only when the turret is at its known center to
-  redefine encoder zero.
-- Gamepad 1 D-pad up/down selects a value and left/right changes it.
-- Hold gamepad 1 left bumper for one-tenth steps or right bumper for 10x steps.
-- Gamepad 1 A toggles prediction, B toggles odometry blending, X toggles latency
-  compensation, and Y selects the red/blue scoring cluster.
-
-The changes live in memory, including when another OpMode is selected, until
-the Robot Controller app restarts. Record the final values shown in telemetry
-and copy them into `turretSubsystem2.java` to make the tune the next deployed
-default.
-
-Keep prediction, odometry blending, and latency compensation off while tuning
-the stationary controller. Tune Kp and Kd first, then stiction, Ki, and Kv.
-
-## Additional tuning telemetry
-
-The subsystem already provides the required getters. Temporarily add this to
-[`biobuzzTestTeleOp.java`](../opmodes/testing/biobuzzTestTeleOp.java):
-
-```java
-telemetry.addData("Visible IDs", turret.getVisibleTagIds());
-telemetry.addData("Tx", "%.2f deg", turret.getFilteredTxDeg());
-telemetry.addData("Vision error", "%.2f deg", turret.getLastVisionErrorDeg());
-telemetry.addData("Ticks", "%d -> %.1f",
-        turret.getCurrentTicks(), turret.getTargetTicks());
-telemetry.addData("Power", "%.3f", turret.getAppliedPower());
-telemetry.addData("Target rate", "%.1f deg/s",
-        turret.getTargetRateDegPerSec());
-telemetry.addData("Distance", "%.1f in", turret.getDistanceIn());
-telemetry.addData("Latency", "%.1f ms", turret.getLastLatencyMs());
-telemetry.addData("Lead", "%.2f deg / %.2f s",
-        turret.getPanLeadDeg(), turret.getPredictionTimeS());
-```
-
-The test TeleOp uses D-pad left/right for manual movement and the right trigger
-for auto aim. Reduce `MANUAL_TURRET_POWER` from `0.25` to approximately `0.10`
-while measuring limits and directions.
-
-## 1. Calibrate encoder scale
-
-1. Mark the centered turret position and record the encoder position.
-2. Rotate the turret through a measured angle, preferably 45 or 60 degrees.
-3. Record the encoder change.
-4. Calculate:
-
-   ```text
-   TICKS_PER_DEGREE = abs(change in ticks) / measured angle
-   ```
-
-5. Repeat in both directions and average the results.
-6. Update `TICKS_PER_DEGREE`.
-
-## 2. Verify direction signs
-
-### `MOTOR_DIRECTION_SIGN`
-
-Apply positive manual motor power and watch the encoder:
-
-- Positive power increases ticks: use `1.0`.
-- Positive power decreases ticks: use `-1.0`.
-
-This sign is also used by the soft-stop logic.
-
-### `AIM_DIRECTION_SIGN`
-
-Place an allowed AprilTag 5 to 10 degrees away from the crosshair and briefly
-hold auto aim:
-
-- If the absolute vision error decreases, the sign is correct.
-- If the error grows or the turret moves away, release the trigger immediately
-  and flip `AIM_DIRECTION_SIGN`.
-
-Do not tune gains until both direction tests pass.
-
-## 3. Set safe travel limits
-
-1. Using low manual power, move toward one safe mechanical extreme.
-2. Stop before a hard stop, wire strain, or robot collision.
-3. Record the encoder position.
-4. Repeat at the other extreme.
-5. Leave a margin of approximately 5 to 10 ticks.
-6. Enter the results in `MIN_TURRET_TICKS` and `MAX_TURRET_TICKS`.
-7. Verify that manual movement is stopped correctly at both limits.
-
-## 4. Tune stationary position control
-
-Use a stationary robot and tag. Start with:
-
-```java
-public static boolean PREDICTION_ENABLED = false;
-public static boolean USE_ODOMETRY_PREDICTION = false;
-public static double POSITION_KI = 0.0;
-public static double VELOCITY_KV = 0.0;
-public static double STICTION_POWER = 0.0;
-```
-
-The checked-in `live-tune-v2-cluster` profile uses a conservative version of the
-System 1 inner loop:
-
-```java
-POSITION_KP = 0.045;
-VELOCITY_KD = 0.0040;
-VELOCITY_KV = 0.0015;
-POSITION_KI = 0.0005;
-MAX_INTEGRAL_POWER = 0.025;
-STICTION_POWER = 0.050;
-MAX_TURRET_POWER = 0.40;
-VISION_CORRECTION_GAIN = 0.12;
-```
-
-Subsystem 2 filters encoder velocity with an alpha of `0.30` and scales the
-entire controller output from 25 percent near the target to full power at a
-25-tick error. For isolated P/D tuning, temporarily setting Ki, Kv, and
-stiction to zero is still recommended. With prediction disabled, target-rate
-feedforward is also disabled. `LATENCY_COMPENSATION_ENABLED` defaults to
-`false`; enable and verify its direction only after stationary tracking is
-smooth.
-
-### Proportional gain: `POSITION_KP`
-
-1. Start with a low value.
-2. Place the target 5 to 15 degrees off-center.
-3. Engage auto aim.
-4. Increase Kp by roughly 20 to 25 percent per test.
-5. When the turret begins to overshoot or oscillate, reduce Kp by approximately
-   15 to 25 percent.
-
-Increase Kp if response is slow. Reduce it if the turret repeatedly crosses the
-target or immediately saturates at `MAX_TURRET_POWER`.
-
-### Velocity damping: `VELOCITY_KD`
-
-Start at zero and increase it in small increments. Increase Kd to reduce
-overshoot and bouncing. Reduce it if motion becomes sluggish, noisy, or the
-power chatters. Test approaches from both sides of the tag.
-
-This controller uses velocity error rather than the mathematical derivative of
-position error.
-
-### Stiction: `STICTION_POWER`
-
-Find the minimum manual power that reliably begins motion in each direction.
-Set `STICTION_POWER` to roughly 80 to 90 percent of the larger value. For
-example, if reliable motion begins at `0.035`, try `0.028` to `0.032`.
-
-Too much stiction compensation causes twitching near the target.
-
-### Integral gain: `POSITION_KI`
-
-Only add integral if the turret consistently stops slightly off target under
-load. Increase it in very small steps and wait at least one second during each
-test. Reduce it if the turret slowly winds up and overshoots. Do not use
-integral to hide an incorrect aim offset.
-
-## 5. Tune the vision filter
-
-`VISION_CORRECTION_GAIN` controls how quickly the encoder target follows new
-vision measurements:
-
-- Increase it if tracking visibly lags.
-- Decrease it if target ticks jump or the turret follows camera noise.
-
-The current `0.12` prioritizes smoothness. Try changes such as `0.12`, `0.16`,
-and `0.20`, testing after each change.
-
-After aiming is reliable, set `AIM_STABLE_FRAMES` to approximately 3 to 5. The
-current value of 2 declares the turret ready after two acceptable vision frames.
-
-## 6. Calibrate per-tag optical corrections
-
-The entries in `TAG_AIM_OFFSETS_DEG` use ascending ID order within the selected
-four-tag cluster. For the default blue scoring cluster:
-
-```java
-public static int TARGET_CLUSTER_FIRST_ID = 42;
-```
-
-These offsets now correct small per-tag optical or installation biases before
-the cluster geometry fit. For each tag:
-
-1. Place the robot at a fixed position where all four tags are visible.
-2. Compare each tag's measured Tx against the value predicted by the known
-   cluster spacing.
-3. Average the residual over several frames.
-4. Store the residual correction in the corresponding array position.
-
-Example:
-
-```java
-public static final double[] TAG_AIM_OFFSETS_DEG = {
-    0.35, -0.20, 0.10, 0.45
-};
-```
-
-The cluster solver calculates `tag tx - correction`. Do not use these values as
-a global shot offset or to conceal direction and encoder-scale errors. Apply a
-separate global shot correction only after cluster-center tracking is verified.
-
-## 7. Calibrate distance
-
-Measure these values from the camera lens or optical center:
-
-- `CAMERA_HEIGHT_IN`
-- The center height of each tag
-- The actual downward camera angle
-
-Tag heights follow ascending ID order within the selected cluster:
-
-```java
-public static final double[] TAG_HEIGHTS_IN = {
-    14.5, 14.5, 14.5, 14.5
-};
-```
-
-At several tape-measured horizontal distances, compare the known distance to
-`getDistanceIn()`. Estimate the camera angle at each position with:
+The checked-in values are:
 
 ```text
-camera down angle =
-    degrees(atan((camera height - tag height) / known distance)) + measured ty
+POSITION_KP         0.045
+VELOCITY_KD         0.0040
+POSITION_KI         0.0005
+VELOCITY_KV         0.0015
+MAX_INTEGRAL_POWER  0.025
+STICTION_POWER      0.050
+MAX_TURRET_POWER    0.40
 ```
 
-Average several measurements and update `CAMERA_DOWN_ANGLE_DEG`.
+Keep `PREDICTION_ENABLED`, `USE_ODOMETRY_PREDICTION`, and
+`LATENCY_COMPENSATION_ENABLED` off while tuning on a stationary robot and tag.
+If retuning from scratch, temporarily set `POSITION_KI`, `VELOCITY_KV`, and
+`STICTION_POWER` to zero.
 
-## 8. Tune moving-target feedforward
+Tune in this order:
 
-After stationary aiming works, drive sideways slowly while prediction remains
-disabled. Adjust `VELOCITY_KV`:
+1. Start with low `POSITION_KP`. Increase it until the turret responds quickly.
+   When it begins to overshoot or oscillate, reduce it about 15-25%.
+2. Start `VELOCITY_KD` at zero and increase it in small steps until overshoot
+   settles. Reduce it if movement becomes sluggish, noisy, or chatters.
+3. Find the lowest manual power that reliably starts movement in both
+   directions. Set `STICTION_POWER` to roughly 80-90% of the larger value.
+4. Add `POSITION_KI` only if the turret consistently stops slightly off target
+   under load. Increase it very slowly; reduce it if the turret winds up and
+   crosses the target after a delay.
+5. Keep `VELOCITY_KV` at zero for stationary tests. Tune it later while driving
+   to correct consistent lag during predicted movement.
+6. Finally adjust `VISION_CORRECTION_GAIN`: increase it if target tracking lags,
+   or decrease it if the setpoint follows camera noise.
 
-- If the turret consistently trails, increase Kv.
-- If it gets ahead or overshoots during motion, decrease Kv.
-- If it moves in the wrong direction, correct the direction/rate signs instead
-  of applying an extreme gain.
+Change one value at a time and approach the target from both directions. Do not
+use integral, stiction, or a large optical offset to hide an incorrect encoder
+scale or direction sign.
 
-Repeat at several driving speeds.
+### 4. Moving-target prediction
 
-## 9. Enable prediction
+Only enable `PREDICTION_ENABLED` after stationary aiming is reliable.
 
-Set `PREDICTION_ENABLED` to `true` only after the previous stages pass.
+- `FIXED_SHOT_DELAY_S` is command-to-projectile-release delay.
+- `FIXED_FLIGHT_TIME_S` is the fixed portion of flight time.
+- `TOF_PER_INCH_S` is the additional flight time per inch.
+- If the turret trails a moving target, carefully increase prediction time or
+  `VELOCITY_KV`. If it leads or overshoots, decrease it.
 
-Measure:
+Use slow-motion video at several distances to measure flight time. A reversed
+lead is a direction problem, not a reason to use negative prediction time.
 
-- `FIXED_SHOT_DELAY_S`: firing command to projectile release
-- `FIXED_FLIGHT_TIME_S`: fixed portion of flight time
-- `TOF_PER_INCH_S`: change in flight time per inch
+### 5. Odometry tracking
 
-Slow-motion recordings at three or more distances can be fitted to:
+Enable `USE_ODOMETRY_PREDICTION` only after vision-only tracking works. Verify:
 
-```text
-flight time = FIXED_FLIGHT_TIME_S + TOF_PER_INCH_S * distance
+- Moving the robot forward produces positive forward velocity.
+- Moving left produces positive left velocity.
+- Counter-clockwise rotation produces positive heading velocity.
+- Vision and odometry bearing/range rates have matching signs while driving.
+
+Correct only the corresponding `ODOMETRY_*_SIGN` when an axis is reversed.
+During a final test, cover the tags briefly and confirm
+`isOdometryTrackingActive()` becomes true and the turret continues in the
+correct direction.
+
+### Acceptance checks
+
+- The turret approaches correctly and settles from both directions.
+- It stays within `AIM_TOLERANCE_DEG` without sustained oscillation.
+- Normal corrections do not remain pinned at `MAX_TURRET_POWER`.
+- Both soft limits stop movement before the mechanical limits.
+- Tracking recovers cleanly after a brief loss of vision.
+
+## Add auto-aim to another TeleOp
+
+Create the subsystem once after creating `Hardware`:
+
+```java
+turretSubsystem2 turret = new turretSubsystem2(robot);
+ElapsedTime loopTimer = new ElapsedTime();
 ```
 
-During lateral driving:
+Reset the timer after `waitForStart()`. Then call the combined update exactly
+once per loop:
 
-- A shot landing behind the moving aim point needs more prediction time.
-- A shot landing ahead needs less prediction time.
-- Reversed lead indicates a sign error; do not compensate with negative time.
+```java
+double dtSeconds = loopTimer.seconds();
+loopTimer.reset();
 
-Leave odometry prediction disabled until vision-only prediction works. Then
-enable `USE_ODOMETRY_PREDICTION` and verify every odometry sign independently.
+boolean autoAim = gamepad1.right_trigger > 0.20;
+double manualPower = ((gamepad1.dpad_right ? 1.0 : 0.0)
+        - (gamepad1.dpad_left ? 1.0 : 0.0)) * 0.25;
 
-With `USE_ODOMETRY_PREDICTION` enabled, vision measurements also anchor the
-CELL opening as a point in Pinpoint field coordinates. If the tags disappear,
-the subsystem recomputes the target bearing and distance from the current
-Pinpoint pose for up to `ODOMETRY_TARGET_HOLD_MS` (default 1000 ms). Telemetry
-changes the target source from `VISION` to `ODOMETRY` during this interval.
-After the timeout, the turret stops following the saved point.
+turret.update(dtSeconds, autoAim, manualPower);
+```
 
-This compensates for robot translation and rotation during a short occlusion.
-It cannot observe motion of the BIOBUZZ CELL itself while the tags are hidden,
-which is why the fallback is deliberately time-limited.
+Call `turret.stop()` when the OpMode exits. The combined update handles the
+Limelight, turret controller, Pinpoint update, odometry rates, and short
+vision-loss tracking; the other TeleOp should not duplicate that turret logic.
 
-Use the live tuner's three odometry telemetry lines before enabling the blend:
+`USE_ODOMETRY_PREDICTION` remains off by default for safety. Turn it on only
+after confirming that Pinpoint forward, left, and heading signs are correct.
+When enabled, the subsystem saves the last visible target in field coordinates
+and continues tracking it for up to `ODOMETRY_TARGET_HOLD_MS` after vision is
+lost.
 
-1. Push the robot forward: `forward` must be positive and `left` near zero.
-2. Push it left: `left` must be positive and `forward` near zero.
-3. Rotate counter-clockwise: `turn` must be positive.
-4. With a stationary visible target, drive in simple forward, left, and turning
-   motions. The vision and odometry bearing/range rates should have the same
-   sign and similar magnitude after the vision filters settle.
+## Shooter RPM
 
-If a raw direction is reversed, change only its corresponding
-`ODOMETRY_FORWARD_SIGN`, `ODOMETRY_LEFT_SIGN`, or `ODOMETRY_HEADING_SIGN`.
-If all raw axes are correct but bearing rate is reversed, check
-`ODOMETRY_BEARING_SIGN`. Do not enable odometry blending until these tests pass.
+Auto-aim integration does not require an RPM change. Use the turret's distance
+to select the existing calibrated RPM:
 
-## Acceptance checks
+```java
+if (turret.hasDistance()) {
+    shooter.setTargetForDistance(turret.getImpactDistanceIn());
+}
+shooter.update(dtSeconds);
+```
 
-A finished tune should:
+Only change `SHOT_DISTANCE_IN` / `SHOT_RPM` in `shooterSubsystem.java` if
+on-field shots consistently land high or low at a measured distance. Check
+`MOTOR_TICKS_PER_REVOLUTION` and `MOTOR_REVS_PER_OUTTAKE_REV` first if reported
+RPM does not match a tachometer.
 
-- Approach the target correctly from both directions.
-- Settle without sustained left/right oscillation.
-- Hold `getLastVisionErrorDeg()` near the configured tolerance (currently
-  plus or minus 0.40 degrees).
-- Avoid remaining at `MAX_TURRET_POWER` during ordinary corrections.
-- Stop safely at both software limits.
-- Work consistently for every allowed tag, distance, and turret angle.
-- Recover cleanly after briefly losing the target.
+## Quick checks
+
+- Hold auto-aim and confirm the turret moves toward the target.
+- Confirm the soft limits stop motion at `MIN_TURRET_TICKS` and
+  `MAX_TURRET_TICKS`.
+- Confirm `hasDistance()` becomes true before using distance-based RPM.
+- If odometry tracking is enabled, briefly cover the tags while driving and
+  confirm `isOdometryTrackingActive()` becomes true without reversing aim.

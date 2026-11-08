@@ -22,7 +22,7 @@ public class turretSubsystem2 {
     // ========================= VALUES TO CALIBRATE =========================
 
     /** Displayed by the test TeleOp so the deployed tuning profile is verifiable. */
-    public static final String TUNE_VERSION = "live-tune-v2-cluster";
+    public static final String TUNE_VERSION = "competition-v1-cluster";
 
     /** Limelight AprilTag pipeline number. */
     public static final int APRILTAG_PIPELINE = 1;
@@ -37,18 +37,18 @@ public class turretSubsystem2 {
     public static final double[] TAG_HEIGHTS_IN = {};
 
     /** Encoder ticks per degree (System 1 calibrated value). */
-    public static double TICKS_PER_DEGREE = 1.79;
+    public static final double TICKS_PER_DEGREE = 1.78;
 
     /** Flip this sign if the turret corrects away from the target. */
-    public static double AIM_DIRECTION_SIGN = 1.0;
+    public static final double AIM_DIRECTION_SIGN = 1.0;
 
     /** Flip this sign if motor power and encoder tick direction disagree. */
-    public static double MOTOR_DIRECTION_SIGN = 1.0;
+    public static final double MOTOR_DIRECTION_SIGN = 1.0;
 
     /** Encoder safety limits (System 1 limits). */
-    public static int MIN_TURRET_TICKS = -205;
-    public static int MAX_TURRET_TICKS = 71;
-    public static double MAX_TURRET_POWER = 0.40;
+    public static final int MIN_TURRET_TICKS = -140;
+    public static final int MAX_TURRET_TICKS = 140;
+    public static final double MAX_TURRET_POWER = 0.70;
 
     /** Camera geometry for calculating horizontal floor distance. */
     public static final double CAMERA_HEIGHT_IN = 48.0;
@@ -67,17 +67,17 @@ public class turretSubsystem2 {
     public static final double CLUSTER_AIM_POINT_ABOVE_TAGS_IN = 5.622;
 
     /** Conservative smooth baseline, used with velocity and proximity smoothing below. */
-    public static double POSITION_KP = 0.045;
-    public static double VELOCITY_KD = 0.0040;
-    public static double VELOCITY_KV = 0.0015;
-    public static double POSITION_KI = 0.0005;
-    public static double MAX_INTEGRAL_POWER = 0.025;
-    public static double STICTION_POWER = 0.050;
+    public static final double POSITION_KP = 0.045;
+    public static final double VELOCITY_KD = 0.0045;
+    public static final double VELOCITY_KV = 0.00150;
+    public static final double POSITION_KI = 0.005;
+    public static final double MAX_INTEGRAL_POWER = 0.025;
+    public static final double STICTION_POWER = 0.30;
 
     /** Lower values trade reaction speed for less vision-induced twitching. */
-    public static double VISION_CORRECTION_GAIN = 0.12;
-    public static double AIM_TOLERANCE_DEG = 0.40;
-    public static int AIM_STABLE_FRAMES = 2;
+    public static final double VISION_CORRECTION_GAIN = 0.160;
+    public static final double AIM_TOLERANCE_DEG = 0.40;
+    public static final int AIM_STABLE_FRAMES = 2;
 
     /** System 1 leaves latency compensation off for smoother initial tuning. */
     public static boolean LATENCY_COMPENSATION_ENABLED = false;
@@ -92,7 +92,7 @@ public class turretSubsystem2 {
     public static double MAX_DISTANCE_LEAD_IN = 36.0;
 
     /** Odometry prediction settings. */
-    public static boolean USE_ODOMETRY_PREDICTION = false;
+    public static boolean USE_ODOMETRY_PREDICTION = true;
     public static double ODOMETRY_RATE_BLEND = 0.70;
     public static double ODOMETRY_FORWARD_SIGN = 1.0;
     public static double ODOMETRY_LEFT_SIGN = 1.0;
@@ -216,6 +216,16 @@ public class turretSubsystem2 {
 
     public void setManualPower(double power) {
         manualPower = clamp(power, -MAX_TURRET_POWER, MAX_TURRET_POWER);
+    }
+
+    /**
+     * Convenience entry point for adding the turret to another TeleOp. This
+     * also updates Pinpoint odometry and Limelight tracking internally.
+     */
+    public void update(double dtSeconds, boolean autoAimEnabled, double manualPower) {
+        setAutoAimEnabled(autoAimEnabled);
+        setManualPower(manualPower);
+        update(dtSeconds);
     }
 
     /**
@@ -396,6 +406,7 @@ public class turretSubsystem2 {
         rangeRateInitialized = true;
     }
 
+    /** Reads and owns the odometry state used by turret prediction/tracking. */
     private void updateOdometry() {
         if (robot.odo == null) return;
         robot.odo.update();

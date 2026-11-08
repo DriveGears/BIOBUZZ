@@ -83,11 +83,9 @@ public class biobuzzTestTeleOp extends LinearOpMode {
 
                 // Do not allow auto aim in the same loop as a zero operation.
                 boolean autoAim = gamepad1.right_trigger > 0.20 && !turretZeroPressed;
-                turret.setAutoAimEnabled(autoAim);
-
                 double manualTurret = (gamepad1.dpad_right ? 1.0 : 0.0) - (gamepad1.dpad_left ? 1.0 : 0.0);
-                turret.setManualPower(manualTurret * MANUAL_TURRET_POWER);
-                turret.update(dtSeconds);
+                turret.update(dtSeconds, autoAim,
+                        manualTurret * MANUAL_TURRET_POWER);
 
                 // 4. Telemetry
                 telemetry.addData("Drive", "Fwd=%.2f, Strafe=%.2f, Turn=%.2f", forward, strafe, turn);
