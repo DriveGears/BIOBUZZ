@@ -1,24 +1,26 @@
 package org.firstinspires.ftc.teamcode;
+
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 import com.qualcomm.robotcore.eventloop.opmode.Autonomous;
 import com.pedropathing.follower.Follower;
 import org.firstinspires.ftc.teamcode.PedroPathing.Constants;
 import com.pedropathing.api.PoseFactory;
 import com.pedropathing.math.Pose;
-import static com.pedropathing.api.Paths.*;
 import com.pedropathing.paths.Path;
 import com.pedropathing.ivy.Command;
 import com.pedropathing.ivy.Scheduler;
+
+import static com.pedropathing.api.Paths.line;
+import static com.pedropathing.api.Paths.curve;
 import static com.pedropathing.ivy.Scheduler.schedule;
 import static com.pedropathing.ivy.groups.Groups.sequential;
 import static com.pedropathing.ivy.pedro.PedroCommands.follow;
-import static org.opencv.imgproc.Imgproc.line;
+import static com.pedropathing.ivy.pedro.PedroCommands.hold;
+import static com.pedropathing.ivy.commands.Commands.waitMs;
+import static com.pedropathing.ivy.groups.Groups.parallel;
 
-
-
-//p.of( x, y, heading)
 @Autonomous
-public class AUTO extends OpMode{
+public class AUTO extends OpMode {
     private Follower follower;
     private final PoseFactory p = PoseFactory.degrees();
     private final Pose startPose = p.of(56, 8, 90);
@@ -31,68 +33,75 @@ public class AUTO extends OpMode{
     private final Pose control3Pose = p.of(46, 119.6, 110);
     private final Pose parkPose = p.of(8.4, 114.6, 0);
 
-
     private Path startToScore() {
+        // Correctly calls Pedro Pathing's line() now
         return line(startPose, scorePose).linear(startPose, scorePose);
     }
 
-    private Path line(Pose startPose, Pose scorePose) {
-        return line(startPose, scorePose);
-    }
-
-
     private Path flower() {
         return curve(scorePose, controlPose, flowerPose).linear(scorePose, flowerPose);
-        // return curve(startPose, controlPose, parkPose).linear(startPose, parkPose);
     }
 
     private Path startToScore2() {
         return curve(flowerPose, control2Pose, score2Pose).linear(flowerPose, score2Pose);
-        // return curve(startPose, controlPose, parkPose).linear(startPose, parkPose);
     }
-
 
     private Path flower2() {
         return line(score2Pose, flower2Pose).linear(score2Pose, flower2Pose);
-        // return curve(startPose, controlPose, parkPose).linear(startPose, parkPose);
     }
+
     private Path park() {
         return curve(flower2Pose, control3Pose, parkPose).linear(flower2Pose, parkPose);
-        // return curve(startPose, controlPose, parkPose).linear(startPose, parkPose);
     }
 
     private Command autoRoutine() {
         return sequential(
+                // Path 1 -> Stop for 4 seconds
                 follow(follower, startToScore()),
+                parallel(hold(follower), waitMs(4000)),
+
+                // Path 2 -> Stop for 1 second
                 follow(follower, flower()),
+                parallel(hold(follower), waitMs(1000)),
+
+                // Path 3 -> Stop for 4 seconds
                 follow(follower, startToScore2()),
+                parallel(hold(follower), waitMs(4000)),
+
+                // Path 4 -> Stop for 3 seconds
                 follow(follower, flower2()),
-                follow(follower, park())
+                parallel(hold(follower), waitMs(3000)),
+
+                // Path 5 -> Stop for 5.2 seconds
+                follow(follower, park()),
+                parallel(hold(follower), waitMs(5200))
         );
     }
 
-        @Override
-        public void init () {
-            Scheduler.reset();
-            follower = Constants.create(hardwareMap);
-            follower.setPose(startPose);
-            follower.update();
-        }
+    @Override
+    public void init() {
+        Scheduler.reset();
+        follower = Constants.create(hardwareMap);
+        follower.setPose(startPose);
+        follower.update();
+    }
 
-        @Override
-        public void start () {
-            schedule(autoRoutine());
-        }
+    @Override
+    public void start() {
+        schedule(autoRoutine());
+    }
 
-        @Override
-        public void loop () {
-            follower.update();
-            Scheduler.execute();
-            // add your other methods needed in the loop here
-            telemetry.addData("X", follower.pose().x());
-            telemetry.addData("Y", follower.pose().y());
-            telemetry.addData("Heading", Math.toDegrees(follower.pose().heading()));
-            telemetry.addData("Follower Mode", follower.mode());
-            telemetry.update();
-        }
+    @Override
+    public void loop() {
+        follower.update();
+        Scheduler.execute();
+
+        telemetry.addData("X", follower.pose().x());
+        telemetry.addData("Y", follower.pose().y());
+        telemetry.addData("Heading", Math.toDegrees(follower.pose().heading()));
+        telemetry.addData("Follower Mode", follower.mode());
+        telemetry.update();
+    }
 }
+
+
