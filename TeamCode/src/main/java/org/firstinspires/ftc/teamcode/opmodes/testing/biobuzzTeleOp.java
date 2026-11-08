@@ -16,6 +16,20 @@ import com.qualcomm.robotcore.hardware.DcMotorSimple;
 import org.firstinspires.ftc.teamcode.Hardware;
 import org.firstinspires.ftc.teamcode.PedroPathing.Constants;
 
+/*
+ * assumes 144inx144in field size
+ *
+ *  ---- CONTROLS ----
+ * Intake                       right trigger (change to always)
+ * Outtake and transfer         left trigger
+ * Reverse intake               right bumper
+ * Robot centric driving
+ * Go to nearest flower         x
+ * Cancel go to flower          b
+ *
+ * !!!! Change starting position by setting START_POSITION to 0-3 !!!!
+ */
+
 @TeleOp(name = "Basic Mecanum TeleOp", group = "TeleOp")
 public class biobuzzTeleOp extends LinearOpMode {
 
@@ -27,11 +41,23 @@ public class biobuzzTeleOp extends LinearOpMode {
     // Estimated flower centres from the simulator.
     // X/Y in inches, heading in degrees.
     private static final double[][] FLOWERS = {
-            {1.46, 46.44, 180},   // West
-            {46.73, 139.72, 90},  // North
-            {140.33, 94.29, 0},   // East
-            {94.90, 0.43, 270}    // South
+            {0, 48, 180},   // West
+            {48, 144, 90},   // North
+            {144, 96, 0},  // East
+            {96, 0, 270}    // South
     };
+
+    private static final Pose[] START_POSES = {
+            new Pose(60, 8, Math.toRadians(90)),         // Bottom Left
+            new Pose(84, 8, Math.toRadians(90)),         // Bottom Right
+            new Pose(60, 136, Math.toRadians(270)),     // Top Left
+            new Pose(84, 136, Math.toRadians(270))      // Top Right
+    };
+    // 0 = Bottom Left
+    // 1 = Bottom Right
+    // 2 = Top Left
+    // 3 = Top Right
+    private static final int START_POSITION = 0;
 
     private static final String[] FLOWER_NAMES = {
             "West", "North", "East", "South"
@@ -41,7 +67,6 @@ public class biobuzzTeleOp extends LinearOpMode {
     // Positive side offset means LEFT.
     private static final double INTAKE_FORWARD_IN = 8.5;
     private static final double INTAKE_LEFT_IN = 8.5;
-
     private Pose flowerTarget;
     private int selectedFlower = -1;
 
@@ -63,49 +88,43 @@ public class biobuzzTeleOp extends LinearOpMode {
         robot.rb.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
 
         telemetry.addLine("Robot Initialized");
-        telemetry.addLine("X: nearest flower | B: cancel");
         telemetry.update();
 
         waitForStart();
 
         if (isStopRequested()) return;
 
-        // Only correct if the robot physically starts at this field pose.
-        follower.setPose(new Pose(
-                56.0,
-                8.0,
-                Math.toRadians(0)
-        ));
+        follower.setPose(START_POSES[START_POSITION]);
 
         follower.update();
+
         previousX = gamepad1.x;
 
         while (opModeIsActive()) {
             double forward = -gamepad1.left_stick_y;
-            double lateral = gamepad1.left_stick_x;
-            double turn = gamepad1.right_stick_x;
+            double lateral = -gamepad1.left_stick_x;
+            double turn = -gamepad1.right_stick_x;
 
             boolean intake = gamepad1.right_trigger > 0.5;
             boolean outtake = gamepad1.left_trigger > 0.5;
             boolean spit = gamepad1.right_bumper;
 
             if (intake) {
-                robot.intake.setPower(0.8);
+                robot.intake.setPower(0.85);
             } else if (spit) {
-                robot.intake.setPower(-0.8);
+                robot.intake.setPower(-0.85);
             } else {
                 robot.intake.setPower(0);
             }
 
             if (outtake) {
-                robot.outtake.setPower(0.8);
-                robot.transfer.setPower(0.8);
+                robot.outtake.setPower(0.9);
+                robot.transfer.setPower(0.9);
             } else {
                 robot.outtake.setPower(0);
                 robot.transfer.setPower(0);
             }
 
-            // Detect a new X press.
             boolean xPressed = gamepad1.x && !previousX;
             previousX = gamepad1.x;
 
@@ -119,23 +138,25 @@ public class biobuzzTeleOp extends LinearOpMode {
                 goToNearestFlower();
             }
 
-            // Only allow manual driving when not following the flower path.
-            if (!goingToFlower) {
-                DrivePowers powers = ManualDrive.fieldCentric(
-                        forward,
-                        lateral,
-                        turn,
-                        follower.pose().heading()
-                );
+////          // field centric
+//            if (!goingToFlower) {
+//                DrivePowers powers = ManualDrive.fieldCentric(
+//                        forward,
+//                        lateral,
+//                        turn,
+//                        follower.pose().heading()
+//                );
+//
+//                follower.manual(powers);
+//            }
 
-                // Switch back to manual control to cancel the path.
-                follower.manual(powers);
+            // robot centric
+            if (!goingToFlower) {
+                follower.manual(forward, lateral, turn);
             }
 
             follower.update();
 
-
-            // Finished when Pedro is NOT busy.
             if (goingToFlower && !follower.isBusy()) {
                 goingToFlower = false;
             }
@@ -146,16 +167,10 @@ public class biobuzzTeleOp extends LinearOpMode {
             telemetry.addData("Follower busy", follower.isBusy());
 
             if (selectedFlower >= 0 && flowerTarget != null) {
-                telemetry.addData(
-                        "Selected flower",
-                        FLOWER_NAMES[selectedFlower]
-                );
+                telemetry.addData("Selected flower", FLOWER_NAMES[selectedFlower]);
                 telemetry.addData("Target X (in)", flowerTarget.x());
                 telemetry.addData("Target Y (in)", flowerTarget.y());
-                telemetry.addData(
-                        "Target heading (deg)",
-                        Math.toDegrees(flowerTarget.heading())
-                );
+                telemetry.addData("Target heading (deg)", Math.toDegrees(flowerTarget.heading()));
             }
 
             telemetry.addData("Forward", forward);
@@ -173,10 +188,7 @@ public class biobuzzTeleOp extends LinearOpMode {
 
             telemetry.addData("Robot X", robotPose.x());
             telemetry.addData("Robot Y", robotPose.y());
-            telemetry.addData(
-                    "Robot Heading",
-                    Math.toDegrees(robotPose.heading())
-            );
+            telemetry.addData("Robot Heading", Math.toDegrees(robotPose.heading()));
 
             telemetry.update();
         }
@@ -185,7 +197,7 @@ public class biobuzzTeleOp extends LinearOpMode {
     private void goToNearestFlower() {
         Pose current = follower.pose();
 
-        // Validate CURRENT position, not the unassigned flowerTarget.
+        // Check current pos of robot
         if (current == null
                 || !Double.isFinite(current.x())
                 || !Double.isFinite(current.y())
@@ -196,7 +208,7 @@ public class biobuzzTeleOp extends LinearOpMode {
         double closestDistance = Double.MAX_VALUE;
         selectedFlower = -1;
 
-        // Find the closest flower centre.
+        // Find the closest flower center.
         for (int i = 0; i < FLOWERS.length; i++) {
             double dx = current.x() - FLOWERS[i][0];
             double dy = current.y() - FLOWERS[i][1];
@@ -215,37 +227,24 @@ public class biobuzzTeleOp extends LinearOpMode {
 
         double flowerX = FLOWERS[selectedFlower][0];
         double flowerY = FLOWERS[selectedFlower][1];
-        double flowerHeading =
-                Math.toRadians(FLOWERS[selectedFlower][2]);
+        double flowerHeading = Math.toRadians(FLOWERS[selectedFlower][2]);
 
         // Offset the robot's destination so the intake meets the flower.
-        double targetX = flowerX
-                - INTAKE_FORWARD_IN * Math.cos(flowerHeading)
-                + INTAKE_LEFT_IN * Math.sin(flowerHeading);
+        double targetX = flowerX - INTAKE_FORWARD_IN * Math.cos(flowerHeading) + INTAKE_LEFT_IN * Math.sin(flowerHeading);
 
-        double targetY = flowerY
-                - INTAKE_FORWARD_IN * Math.sin(flowerHeading)
-                - INTAKE_LEFT_IN * Math.cos(flowerHeading);
+        double targetY = flowerY - INTAKE_FORWARD_IN * Math.sin(flowerHeading) - INTAKE_LEFT_IN * Math.cos(flowerHeading);
 
         flowerTarget = new Pose(targetX, targetY, flowerHeading);
 
         // Avoid creating a nearly zero-length path.
         // This does not correct heading if already at the target location.
-        if (Math.hypot(
-                targetX - current.x(),
-                targetY - current.y()
-        ) < 0.1) {
+        if (Math.hypot(targetX - current.x(), targetY - current.y()) < 0.1) {
             return;
         }
 
-        Pose start = new Pose(
-                current.x(),
-                current.y(),
-                current.heading()
-        );
+        Pose start = new Pose(current.x(), current.y(), current.heading());
 
-        Path path = line(start, flowerTarget)
-                .linear(start, flowerTarget);
+        Path path = line(start, flowerTarget).linear(start, flowerTarget);
 
         follower.follow(path);
         goingToFlower = true;
