@@ -1,98 +1,85 @@
 package org.firstinspires.ftc.teamcode;
+
+import com.pedropathing.api.PoseFactory;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 import com.qualcomm.robotcore.eventloop.opmode.Autonomous;
 import com.pedropathing.follower.Follower;
-import org.firstinspires.ftc.teamcode.PedroPathing.Constants;
-import com.pedropathing.api.PoseFactory;
 import com.pedropathing.math.Pose;
+import org.firstinspires.ftc.teamcode.PedroPathing.Constants;
 import static com.pedropathing.api.Paths.*;
 import com.pedropathing.paths.Path;
-import com.pedropathing.ivy.Command;
 import com.pedropathing.ivy.Scheduler;
 import static com.pedropathing.ivy.Scheduler.schedule;
-import static com.pedropathing.ivy.groups.Groups.sequential;
 import static com.pedropathing.ivy.pedro.PedroCommands.follow;
-import static org.opencv.imgproc.Imgproc.line;
+import com.pedropathing.ivy.Command;
+import static com.pedropathing.ivy.groups.Groups.sequential;
 
+@Autonomous(name = "Auto Test", group = "Autonomous")
+public class AUTO extends OpMode {
 
-
-//p.of( x, y, heading)
-@Autonomous
-public class AUTO extends OpMode{
     private Follower follower;
-    private final PoseFactory p = PoseFactory.degrees();
-    private final Pose startPose = p.of(56, 8, 90);
-    private final Pose scorePose = p.of(56, 21.3, 90);
-    private final Pose controlPose = p.of(51.3, 6.8, 180);
-    private final Pose flowerPose = p.of(8.7, 8.6, 180);
-    private final Pose control2Pose = p.of(31.7, 118.4, 180);
-    private final Pose score2Pose = p.of(56.9, 117.7, 110);
-    private final Pose flower2Pose = p.of(48.7, 130.7, 110);
-    private final Pose control3Pose = p.of(46, 119.6, 110);
-    private final Pose parkPose = p.of(8.4, 114.6, 0);
+    private final PoseFactory poseFactory = PoseFactory.degrees();
+    private final Pose startPose = poseFactory.of(58, 9, 180); // tuned starting pose with 90 deg heading
+    private final Pose flowerPose = poseFactory.of(19.2, 50.3, 180);
+    private final Pose parkPose = poseFactory.of(46.8, 118.3, 0);
+    private String initError = null;
 
+    private Path park() {
+        return line(startPose, parkPose).constant(0);
+    }
 
     private Path startToScore() {
-        return line(startPose, scorePose).linear(startPose, scorePose);
-    }
-
-    private Path line(Pose startPose, Pose scorePose) {
-        return line(startPose, scorePose);
-    }
-
-
-    private Path flower() {
-        return curve(scorePose, controlPose, flowerPose).linear(scorePose, flowerPose);
-        // return curve(startPose, controlPose, parkPose).linear(startPose, parkPose);
-    }
-
-    private Path startToScore2() {
-        return curve(flowerPose, control2Pose, score2Pose).linear(flowerPose, score2Pose);
-        // return curve(startPose, controlPose, parkPose).linear(startPose, parkPose);
-    }
-
-
-    private Path flower2() {
-        return line(score2Pose, flower2Pose).linear(score2Pose, flower2Pose);
-        // return curve(startPose, controlPose, parkPose).linear(startPose, parkPose);
-    }
-    private Path park() {
-        return curve(flower2Pose, control3Pose, parkPose).linear(flower2Pose, parkPose);
-        // return curve(startPose, controlPose, parkPose).linear(startPose, parkPose);
+        return line(startPose, flowerPose).constant(0);
     }
 
     private Command autoRoutine() {
         return sequential(
                 follow(follower, startToScore()),
-                follow(follower, flower()),
-                follow(follower, startToScore2()),
-                follow(follower, flower2()),
+                //add mechanism commands here.
                 follow(follower, park())
         );
     }
 
-        @Override
-        public void init () {
+    @Override
+    public void init() {
+        try {
             Scheduler.reset();
             follower = Constants.create(hardwareMap);
             follower.setPose(startPose);
             follower.update();
+            telemetry.addData("Status", "Initialized Successfully");
+        } catch (Exception e) {
+            initError = e.getClass().getSimpleName() + ": " + e.getMessage();
+            telemetry.addData("CRITICAL INIT ERROR", initError);
+            telemetry.addLine("Check Driver Station config names: 'odo', 'lf', 'rf', 'lb', 'rb'");
         }
+        telemetry.update();
+    }
 
-        @Override
-        public void start () {
+    @Override
+    public void start() {
+        if (initError == null && follower != null) {
             schedule(autoRoutine());
         }
+    }
 
-        @Override
-        public void loop () {
-            follower.update();
-            Scheduler.execute();
-            // add your other methods needed in the loop here
+    @Override
+    public void loop() {
+        if (initError != null) {
+            telemetry.addData("CRITICAL ERROR", initError);
+            telemetry.update();
+            return;
+        }
+
+        follower.update();
+        Scheduler.execute();
+
+        telemetry.addData("Follower", "Running");
+        if (follower != null) {
             telemetry.addData("X", follower.pose().x());
             telemetry.addData("Y", follower.pose().y());
             telemetry.addData("Heading", Math.toDegrees(follower.pose().heading()));
-            telemetry.addData("Follower Mode", follower.mode());
-            telemetry.update();
         }
+        telemetry.update();
+    }
 }

@@ -13,6 +13,7 @@ public class Hardware {
     public final DcMotorEx transfer;
 
     public Hardware(HardwareMap hwMap) {
+
         this.outtake = hwMap.get(DcMotorEx.class, Specifications.OUTTAKE);
         this.intake = hwMap.get(DcMotorEx.class, Specifications.INTAKE);
         this.transfer = hwMap.get(DcMotorEx.class, Specifications.TRANSFER);
