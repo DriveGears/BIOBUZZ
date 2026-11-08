@@ -17,7 +17,7 @@ import java.util.Deque;
 import java.util.List;
 
 /** Owns AprilTag tracking, motion prediction, and turret motor control (Merged & Optimized). */
-public class turretSubsystem2 {
+public class turretSubsystem {
 
     // ========================= VALUES TO CALIBRATE =========================
 
@@ -193,7 +193,7 @@ public class turretSubsystem2 {
     private double filteredMotorVelocityTicksPerSecond;
     private boolean motorVelocityInitialized;
 
-    public turretSubsystem2(Hardware robot) {
+    public turretSubsystem(Hardware robot) {
         this.robot = robot;
         turretMotor = robot.turret;
         // Never carry a stale command into this subsystem's initialization.

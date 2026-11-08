@@ -6,7 +6,7 @@ import com.qualcomm.robotcore.util.ElapsedTime;
 
 import org.firstinspires.ftc.teamcode.hardware.Hardware;
 import org.firstinspires.ftc.teamcode.subsystems.shooterSubsystem;
-import org.firstinspires.ftc.teamcode.subsystems.turretSubsystem2;
+import org.firstinspires.ftc.teamcode.subsystems.turretSubsystem;
 
 @TeleOp(name = "biobuzz testing teleop", group = "TeleOp")
 public class biobuzzTestTeleOp extends LinearOpMode {
@@ -22,7 +22,7 @@ public class biobuzzTestTeleOp extends LinearOpMode {
     public void runOpMode() {
         Hardware.resetInstance();
         Hardware robot = Hardware.getInstance(hardwareMap);
-        turretSubsystem2 turret = new turretSubsystem2(robot);
+        turretSubsystem turret = new turretSubsystem(robot);
         shooterSubsystem shooter = new shooterSubsystem(robot);
         ElapsedTime loopTimer = new ElapsedTime();
 
@@ -90,7 +90,7 @@ public class biobuzzTestTeleOp extends LinearOpMode {
                 // 4. Telemetry
                 telemetry.addData("Drive", "Fwd=%.2f, Strafe=%.2f, Turn=%.2f", forward, strafe, turn);
                 telemetry.addData("Turret Mode", autoAim ? "AUTO-AIM" : "MANUAL");
-                telemetry.addData("Turret Tune", turretSubsystem2.TUNE_VERSION);
+                telemetry.addData("Turret Tune", turretSubsystem.TUNE_VERSION);
                 telemetry.addData("Target Visible", turret.hasTarget()
                         ? "YES (" + turret.getVisibleTagCount() + " tags: "
                                 + turret.getVisibleTagIds() + ")"
@@ -105,15 +105,15 @@ public class biobuzzTestTeleOp extends LinearOpMode {
                 telemetry.addData("Aim Ready?", turret.isAimReady() ? "READY" : "ALIGNING");
                 telemetry.addData("Turret Position", "%d -> %.1f ticks [%d, %d]",
                         turret.getCurrentTicks(), turret.getTargetTicks(),
-                        turretSubsystem2.MIN_TURRET_TICKS,
-                        turretSubsystem2.MAX_TURRET_TICKS);
+                        turretSubsystem.MIN_TURRET_TICKS,
+                        turretSubsystem.MAX_TURRET_TICKS);
                 telemetry.addData("Turret Raw/Zero", "%d / %d",
                         robot.getTurretRawEncoderTicks(),
                         robot.getTurretEncoderZeroTicks());
                 telemetry.addData("Turret Limit",
-                        turret.getCurrentTicks() <= turretSubsystem2.MIN_TURRET_TICKS
+                        turret.getCurrentTicks() <= turretSubsystem.MIN_TURRET_TICKS
                                 ? "LEFT SOFT LIMIT"
-                                : turret.getCurrentTicks() >= turretSubsystem2.MAX_TURRET_TICKS
+                                : turret.getCurrentTicks() >= turretSubsystem.MAX_TURRET_TICKS
                                         ? "RIGHT SOFT LIMIT" : "clear");
                 telemetry.addData("Turret PID", "err=%+.1f tk, vel=%+.1f tk/s, pwr=%+.3f, I=%+.3f",
                         turret.getPositionErrorTicks(),
