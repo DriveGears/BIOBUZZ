@@ -93,9 +93,9 @@ public class turret_biobuzzTestTeleOp extends LinearOpMode {
                 telemetry.addData("Turret Tune", turretSubsystem.TUNE_VERSION);
                 telemetry.addData("Target Visible", turret.hasTarget()
                         ? "YES (" + turret.getVisibleTagCount() + " tags: "
-                                + turret.getVisibleTagIds() + ")"
+                          + turret.getVisibleTagIds() + ")"
                         : turret.isOdometryTrackingActive()
-                                ? "ODOMETRY (vision lost)" : "NO");
+                          ? "ODOMETRY (vision lost)" : "NO");
                 telemetry.addData("Odo Target", "active=%s age=%.0f ms bearing=%+.1f dist=%.1f",
                         turret.isOdometryTrackingActive(), turret.getTargetAgeMs(),
                         turret.getOdometryTrackedBearingDeg(),
@@ -114,7 +114,7 @@ public class turret_biobuzzTestTeleOp extends LinearOpMode {
                         turret.getCurrentTicks() <= turretSubsystem.MIN_TURRET_TICKS
                                 ? "LEFT SOFT LIMIT"
                                 : turret.getCurrentTicks() >= turretSubsystem.MAX_TURRET_TICKS
-                                        ? "RIGHT SOFT LIMIT" : "clear");
+                                  ? "RIGHT SOFT LIMIT" : "clear");
                 telemetry.addData("Turret PID", "err=%+.1f tk, vel=%+.1f tk/s, pwr=%+.3f, I=%+.3f",
                         turret.getPositionErrorTicks(),
                         turret.getFilteredMotorVelocityTicksPerSecond(),
