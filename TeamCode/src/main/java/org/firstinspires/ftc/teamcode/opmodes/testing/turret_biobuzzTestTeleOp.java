@@ -9,7 +9,7 @@ import org.firstinspires.ftc.teamcode.subsystems.shooterSubsystem;
 import org.firstinspires.ftc.teamcode.subsystems.turretSubsystem;
 
 @TeleOp(name = "biobuzz testing teleop", group = "TeleOp")
-public class biobuzzTestTeleOp extends LinearOpMode {
+public class turret_biobuzzTestTeleOp extends LinearOpMode {
 
     private static final double DRIVE_SPEED = 0.80;
     private static final double STRAFE_MULTIPLIER = 1.10;
