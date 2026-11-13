@@ -48,21 +48,21 @@ public class Constants {
     });
     public static ForesightConfig foresightConfig = new ForesightConfig(
             c -> {
-                // 1. Slightly lowered translational gains to prevent positional over-correction
-                Controller primaryTranslationalForward = Controller.proportional(0.08);
-                Controller secondaryTranslationalForward = Controller.proportional(0.18);
-                Controller primaryTranslationalLateral = Controller.proportional(0.12);
-                Controller secondaryTranslationalLateral = Controller.proportional(0.25);
+                // 1. Smooth forward movement, but higher lateral gains to overcome mecanum side-friction
+                Controller primaryTranslationalForward = Controller.proportional(0.05);
+                Controller secondaryTranslationalForward = Controller.proportional(0.12);
+                Controller primaryTranslationalLateral = Controller.proportional(0.22);
+                Controller secondaryTranslationalLateral = Controller.proportional(0.40);
 
                 c.forwardTranslational.set(Controller.piecewise(secondaryTranslationalForward).put(2.5, primaryTranslationalForward));
                 c.strafeTranslational.set(Controller.piecewise(secondaryTranslationalLateral).put(2.5, primaryTranslationalLateral));
 
-                // 2. ZEROED OUT FRICTION FEEDFORWARD (Crucial to stop resting hum/jiggle) [0]
+                // 2. ZEROED OUT FRICTION FEEDFORWARD
                 c.coast.set(Controller.proportionalFeedforward(0.0));
                 c.brake.set(Controller.proportionalFeedforward(0.0));
 
-                // 3. Significantly dropped heading feedback (was 4.25, forcing it down to 1.5 to stop twisting shakes) [0]
-                c.headingFeedback.set(Controller.proportional(2.2));
+                // 3. Lowered heading feedback to eliminate rotational jitter/shaking
+                c.headingFeedback.set(Controller.proportional(1.5));
 
                 // 4. Heavily dampened the brake vectors [0]
                 c.headingBrakeCoefficients.set(Vector2D.cartesian(0.1, -0.01));

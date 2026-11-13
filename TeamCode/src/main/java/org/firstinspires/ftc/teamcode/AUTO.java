@@ -11,7 +11,6 @@ import com.pedropathing.ivy.Command;
 import com.pedropathing.ivy.Scheduler;
 
 import static com.pedropathing.api.Paths.line;
-import static com.pedropathing.api.Paths.curve;
 import static com.pedropathing.ivy.Scheduler.schedule;
 import static com.pedropathing.ivy.groups.Groups.sequential;
 import static com.pedropathing.ivy.groups.Groups.race;
@@ -24,9 +23,8 @@ public class AUTO extends OpMode {
     private Follower follower;
     private final PoseFactory p = PoseFactory.degrees();
 
-    // Changed 180 and 185 to 179 to prevent the 180-degree angle wrap-around bug
-    private final Pose startPose = p.of(55.6, 8.7, 180);
-    private final Pose flowerPose = p.of(13.7, 47.1, 180);
+    private final Pose startPose = p.of(55.6, 9.5, 179);
+    private final Pose flowerPose = p.of(20.4, 77.2, 179);
 
     private Path flower() {
         return line(startPose, flowerPose).linear(startPose, flowerPose);
@@ -34,8 +32,8 @@ public class AUTO extends OpMode {
 
     private Command autoRoutine() {
         return sequential(
-                // Wait 2 seconds at the starting line before moving
-                waitMs(2000),
+                // Wait 1 second at the starting line before moving
+                waitMs(1000),
 
                 // Go to flower and hold position
                 follow(follower, flower()),
@@ -53,7 +51,6 @@ public class AUTO extends OpMode {
 
     @Override
     public void init_loop() {
-        // Keeps the Pinpoint and follower updated while waiting on the field
         follower.update();
         telemetry.addData("Status", "Ready - Keep robot still before Play");
         telemetry.addData("X", follower.pose().x());
