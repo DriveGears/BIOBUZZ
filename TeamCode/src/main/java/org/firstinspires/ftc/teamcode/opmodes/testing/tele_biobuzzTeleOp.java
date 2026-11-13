@@ -1,14 +1,10 @@
 package org.firstinspires.ftc.teamcode.opmodes.testing;
 
 import com.pedropathing.follower.Follower;
-import com.pedropathing.paths.Path;
 import com.pedropathing.math.Pose;
-
-import static com.pedropathing.api.Paths.line;
 
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
-import com.qualcomm.robotcore.hardware.DcMotorSimple;
 import com.qualcomm.robotcore.util.ElapsedTime;
 
 import org.firstinspires.ftc.teamcode.hardware.Hardware;
@@ -22,21 +18,10 @@ public class tele_biobuzzTeleOp extends LinearOpMode {
     private turretSubsystem turret;
     private ElapsedTime loopTimer;
 
-    private boolean goingToFlower = false;
-    private boolean previousX = false;
-
-    private static final double[][] FLOWERS = {
-            {1.46, 46.44, 180},   // West
-            {46.73, 139.72, 90},  // North
-            {140.33, 94.29, 0},   // East
-            {94.90, 0.43, 270}    // South
-    };
-
-    private static final double INTAKE_FORWARD_IN = 8.5;
-    private static final double INTAKE_LEFT_IN = 8.5;
-
-    private Pose flowerTarget;
-    private int selectedFlower = -1;
+    private boolean intakeToggle = false;
+    private boolean outtakeToggle = false;
+    private boolean lastRightTrigger = false;
+    private boolean lastLeftTrigger = false;
 
     @Override
     public void runOpMode() {
@@ -47,13 +32,9 @@ public class tele_biobuzzTeleOp extends LinearOpMode {
         turret = new turretSubsystem(robot);
         loopTimer = new ElapsedTime();
 
-        robot.lf.setDirection(DcMotorSimple.Direction.REVERSE);
-        robot.lb.setDirection(DcMotorSimple.Direction.REVERSE);
-        robot.rf.setDirection(DcMotorSimple.Direction.FORWARD);
-        robot.rb.setDirection(DcMotorSimple.Direction.FORWARD);
-
         telemetry.addLine("Robot Initialized with Turret & Robot-Centric Drive");
-        telemetry.addLine("X: nearest flower | B: cancel | Hold Left Bumper: Turret Auto-Aim");
+        telemetry.addLine("Right Trigger: Toggle Intake | Left Trigger: Toggle Outtake & Transfer");
+        telemetry.addLine("Hold Left Bumper: Turret Auto-Aim | D-pad: Manual Turret");
         telemetry.update();
 
         waitForStart();
@@ -70,7 +51,6 @@ public class tele_biobuzzTeleOp extends LinearOpMode {
         ));
 
         follower.update();
-        previousX = gamepad1.x;
         loopTimer.reset();
 
         while (opModeIsActive()) {
@@ -81,19 +61,27 @@ public class tele_biobuzzTeleOp extends LinearOpMode {
             double lateral = gamepad1.left_stick_x;
             double turn = gamepad1.right_stick_x;
 
-            boolean intake = gamepad1.right_trigger > 0.5;
-            boolean outtake = gamepad1.left_trigger > 0.5;
+            boolean currentRightTrigger = gamepad1.right_trigger > 0.5;
+            if (currentRightTrigger && !lastRightTrigger) {
+                intakeToggle = !intakeToggle;
+            }
+            lastRightTrigger = currentRightTrigger;
+
+            boolean currentLeftTrigger = gamepad1.left_trigger > 0.5;
+            if (currentLeftTrigger && !lastLeftTrigger) {
+                outtakeToggle = !outtakeToggle;
+            }
+            lastLeftTrigger = currentLeftTrigger;
+
             boolean spit = gamepad1.right_bumper;
 
-            if (intake) {
-                robot.intake.setPower(0.8);
-            } else if (spit) {
+            if (spit) {
                 robot.intake.setPower(-0.8);
             } else {
-                robot.intake.setPower(0);
+                robot.intake.setPower(intakeToggle ? 0.8 : 0.0);
             }
 
-            if (outtake) {
+            if (outtakeToggle) {
                 robot.outtake.setPower(0.8);
                 robot.transfer.setPower(0.8);
             } else {
@@ -110,41 +98,21 @@ public class tele_biobuzzTeleOp extends LinearOpMode {
             turret.setManualPower(manualTurretCommand * 0.25);
             turret.update(dtSeconds);
 
-            // Detect a new X press.
-            boolean xPressed = gamepad1.x && !previousX;
-            previousX = gamepad1.x;
+            double denominator = Math.max(Math.abs(forward) + Math.abs(lateral) + Math.abs(turn), 1.0);
+            robot.lf.setPower((forward + lateral + turn) / denominator);
+            robot.lb.setPower((forward - lateral + turn) / denominator);
+            robot.rf.setPower((forward - lateral - turn) / denominator);
+            robot.rb.setPower((forward + lateral - turn) / denominator);
 
-            boolean cancelRequested = gamepad1.b;
-
-            if (cancelRequested) {
-                goingToFlower = false;
-            }
-
-            if (xPressed && !goingToFlower && !cancelRequested) {
-                goToNearestFlower();
-            }
-
-            if (!goingToFlower) {
-                double denominator = Math.max(Math.abs(forward) + Math.abs(lateral) + Math.abs(turn), 1.0);
-                robot.lf.setPower((forward + lateral + turn) / denominator);
-                robot.lb.setPower((forward - lateral + turn) / denominator);
-                robot.rf.setPower((forward - lateral - turn) / denominator);
-                robot.rb.setPower((forward + lateral - turn) / denominator);
-            } else {
-                follower.update();
-            }
-
-            if (goingToFlower && !follower.isBusy()) {
-                goingToFlower = false;
-            }
+            follower.update();
 
             Pose robotPose = follower.pose();
 
             telemetry.addData("Turret Mode", autoAim ? "AUTO-AIM" : "MANUAL");
             telemetry.addData("Target Visible", turret.hasTarget() ? "YES (ID: " + turret.getSelectedTagId() + ")" : "NO");
             telemetry.addData("Aim Ready?", turret.isAimReady() ? "READY" : "ALIGNING");
-            telemetry.addData("Intake", intake);
-            telemetry.addData("Outtake", outtake);
+            telemetry.addData("Intake Toggle", intakeToggle ? "ON" : "OFF");
+            telemetry.addData("Outtake Toggle", outtakeToggle ? "ON" : "OFF");
             telemetry.addData("Robot X", robotPose.x());
             telemetry.addData("Robot Y", robotPose.y());
             telemetry.addData("Robot Heading", Math.toDegrees(robotPose.heading()));
@@ -153,69 +121,5 @@ public class tele_biobuzzTeleOp extends LinearOpMode {
         }
 
         turret.stop();
-    }
-
-    private void goToNearestFlower() {
-        Pose current = follower.pose();
-
-        if (current == null
-                || !Double.isFinite(current.x())
-                || !Double.isFinite(current.y())
-                || !Double.isFinite(current.heading())) {
-            return;
-        }
-
-        double closestDistance = Double.MAX_VALUE;
-        selectedFlower = -1;
-
-        for (int i = 0; i < FLOWERS.length; i++) {
-            double dx = current.x() - FLOWERS[i][0];
-            double dy = current.y() - FLOWERS[i][1];
-
-            double distance = Math.hypot(dx, dy);
-
-            if (distance < closestDistance) {
-                closestDistance = distance;
-                selectedFlower = i;
-            }
-        }
-
-        if (selectedFlower == -1) {
-            return;
-        }
-
-        double flowerX = FLOWERS[selectedFlower][0];
-        double flowerY = FLOWERS[selectedFlower][1];
-        double flowerHeading =
-                Math.toRadians(FLOWERS[selectedFlower][2]);
-
-        double targetX = flowerX
-                - INTAKE_FORWARD_IN * Math.cos(flowerHeading)
-                + INTAKE_LEFT_IN * Math.sin(flowerHeading);
-
-        double targetY = flowerY
-                - INTAKE_FORWARD_IN * Math.sin(flowerHeading)
-                - INTAKE_LEFT_IN * Math.cos(flowerHeading);
-
-        flowerTarget = new Pose(targetX, targetY, flowerHeading);
-
-        if (Math.hypot(
-                targetX - current.x(),
-                targetY - current.y()
-        ) < 0.1) {
-            return;
-        }
-
-        Pose start = new Pose(
-                current.x(),
-                current.y(),
-                current.heading()
-        );
-
-        Path path = line(start, flowerTarget)
-                .linear(start, flowerTarget);
-
-        follower.follow(path);
-        goingToFlower = true;
     }
 }
