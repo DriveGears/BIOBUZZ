@@ -14,32 +14,27 @@ import static com.pedropathing.api.Paths.line;
 import static com.pedropathing.api.Paths.curve;
 import static com.pedropathing.ivy.Scheduler.schedule;
 import static com.pedropathing.ivy.groups.Groups.sequential;
+import static com.pedropathing.ivy.groups.Groups.race;
 import static com.pedropathing.ivy.pedro.PedroCommands.follow;
 import static com.pedropathing.ivy.pedro.PedroCommands.hold;
 import static com.pedropathing.ivy.commands.Commands.waitMs;
-import static com.pedropathing.ivy.groups.Groups.parallel;
 
 @Autonomous
 public class AUTO extends OpMode {
     private Follower follower;
     private final PoseFactory p = PoseFactory.degrees();
-    private final Pose startPose = p.of(56, 8, 90);
-    private final Pose scorePose = p.of(56, 21.3, 90);
-    private final Pose controlPose = p.of(51.3, 6.8, 180);
-    private final Pose flowerPose = p.of(8.7, 8.6, 180);
-    private final Pose control2Pose = p.of(31.7, 118.4, 180);
+
+    // Changed 180 and 185 to 179 to prevent the 180-degree angle wrap-around bug
+    private final Pose startPose = p.of(56, 8, 179);
+    private final Pose flowerPose = p.of(8.7, 8.6, 179);
+    private final Pose control2Pose = p.of(31.7, 118.4, 179);
     private final Pose score2Pose = p.of(56.9, 117.7, 110);
     private final Pose flower2Pose = p.of(48.7, 130.7, 110);
     private final Pose control3Pose = p.of(46, 119.6, 110);
     private final Pose parkPose = p.of(8.4, 114.6, 0);
 
-    private Path startToScore() {
-        // Correctly calls Pedro Pathing's line() now
-        return line(startPose, scorePose).linear(startPose, scorePose);
-    }
-
     private Path flower() {
-        return curve(scorePose, controlPose, flowerPose).linear(scorePose, flowerPose);
+        return line(startPose, flowerPose).linear(startPose, flowerPose);
     }
 
     private Path startToScore2() {
@@ -56,25 +51,24 @@ public class AUTO extends OpMode {
 
     private Command autoRoutine() {
         return sequential(
-                // Path 1 -> Stop for 4 seconds
-                follow(follower, startToScore()),
-                parallel(hold(follower), waitMs(4000)),
+                // Wait 5 seconds at the starting line before moving
+                waitMs(5000),
 
-                // Path 2 -> Stop for 1 second
+                // Path 2 -> Hold position for 2 seconds
                 follow(follower, flower()),
-                parallel(hold(follower), waitMs(1000)),
+                race(hold(follower), waitMs(2000)),
 
-                // Path 3 -> Stop for 4 seconds
+                // Path 3 -> Hold position for 4 seconds
                 follow(follower, startToScore2()),
-                parallel(hold(follower), waitMs(4000)),
+                race(hold(follower), waitMs(4000)),
 
-                // Path 4 -> Stop for 3 seconds
+                // Path 4 -> Hold position for 3 seconds
                 follow(follower, flower2()),
-                parallel(hold(follower), waitMs(3000)),
+                race(hold(follower), waitMs(3000)),
 
-                // Path 5 -> Stop for 5.2 seconds
+                // Path 5 -> Hold position for 6 seconds
                 follow(follower, park()),
-                parallel(hold(follower), waitMs(5200))
+                race(hold(follower), waitMs(6000))
         );
     }
 
@@ -84,6 +78,17 @@ public class AUTO extends OpMode {
         follower = Constants.create(hardwareMap);
         follower.setPose(startPose);
         follower.update();
+    }
+
+    @Override
+    public void init_loop() {
+        // Keeps the Pinpoint and follower updated while waiting on the field
+        follower.update();
+        telemetry.addData("Status", "Ready - Keep robot still before Play");
+        telemetry.addData("X", follower.pose().x());
+        telemetry.addData("Y", follower.pose().y());
+        telemetry.addData("Heading", Math.toDegrees(follower.pose().heading()));
+        telemetry.update();
     }
 
     @Override
@@ -103,5 +108,3 @@ public class AUTO extends OpMode {
         telemetry.update();
     }
 }
-
-
