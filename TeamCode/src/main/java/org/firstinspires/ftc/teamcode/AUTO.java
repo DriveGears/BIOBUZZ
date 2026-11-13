@@ -25,50 +25,21 @@ public class AUTO extends OpMode {
     private final PoseFactory p = PoseFactory.degrees();
 
     // Changed 180 and 185 to 179 to prevent the 180-degree angle wrap-around bug
-    private final Pose startPose = p.of(56, 8, 179);
-    private final Pose flowerPose = p.of(8.7, 8.6, 179);
-    private final Pose control2Pose = p.of(31.7, 118.4, 179);
-    private final Pose score2Pose = p.of(56.9, 117.7, 110);
-    private final Pose flower2Pose = p.of(48.7, 130.7, 110);
-    private final Pose control3Pose = p.of(46, 119.6, 110);
-    private final Pose parkPose = p.of(8.4, 114.6, 0);
+    private final Pose startPose = p.of(55.6, 8.7, 180);
+    private final Pose flowerPose = p.of(13.7, 47.1, 180);
 
     private Path flower() {
         return line(startPose, flowerPose).linear(startPose, flowerPose);
     }
 
-    private Path startToScore2() {
-        return curve(flowerPose, control2Pose, score2Pose).linear(flowerPose, score2Pose);
-    }
-
-    private Path flower2() {
-        return line(score2Pose, flower2Pose).linear(score2Pose, flower2Pose);
-    }
-
-    private Path park() {
-        return curve(flower2Pose, control3Pose, parkPose).linear(flower2Pose, parkPose);
-    }
-
     private Command autoRoutine() {
         return sequential(
-                // Wait 5 seconds at the starting line before moving
-                waitMs(5000),
+                // Wait 2 seconds at the starting line before moving
+                waitMs(2000),
 
-                // Path 2 -> Hold position for 2 seconds
+                // Go to flower and hold position
                 follow(follower, flower()),
-                race(hold(follower), waitMs(2000)),
-
-                // Path 3 -> Hold position for 4 seconds
-                follow(follower, startToScore2()),
-                race(hold(follower), waitMs(4000)),
-
-                // Path 4 -> Hold position for 3 seconds
-                follow(follower, flower2()),
-                race(hold(follower), waitMs(3000)),
-
-                // Path 5 -> Hold position for 6 seconds
-                follow(follower, park()),
-                race(hold(follower), waitMs(6000))
+                race(hold(follower), waitMs(2000))
         );
     }
 
