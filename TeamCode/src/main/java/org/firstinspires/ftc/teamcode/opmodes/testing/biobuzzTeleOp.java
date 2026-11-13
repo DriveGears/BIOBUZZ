@@ -25,7 +25,7 @@ import org.firstinspires.ftc.teamcode.PedroPathing.Constants;
  * Reverse intake               right bumper
  * Robot centric driving
  * Go to nearest flower         x
- * Cancel go to flower          b
+ * Cancel go to flower          a
  *
  * !!!! Change starting position by setting START_POSITION to 0-3 !!!!
  */
@@ -42,8 +42,8 @@ public class biobuzzTeleOp extends LinearOpMode {
     // X/Y in inches, heading in degrees.
     private static final double[][] FLOWERS = {
             {0, 48, 180},   // West
-            {48, 144, 90},   // North
-            {144, 96, 0},  // East
+            {48, 144, 90},  // North
+            {144, 96, 0},   // East
             {96, 0, 270}    // South
     };
 
@@ -87,16 +87,33 @@ public class biobuzzTeleOp extends LinearOpMode {
         robot.rf.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
         robot.rb.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
 
-        telemetry.addLine("Robot Initialized");
-        telemetry.update();
-
-        waitForStart();
-
-        if (isStopRequested()) return;
-
+        // Place the robot at the selected starting position before pressing INIT.
         follower.setPose(START_POSES[START_POSITION]);
 
-        follower.update();
+        // Update localization while waiting for START.
+        while (!isStarted() && !isStopRequested()) {
+            follower.manual(0, 0, 0);
+            follower.update();
+
+            Pose current = follower.pose();
+
+            telemetry.addLine("Robot initialized — keep stationary");
+            telemetry.addData("Starting position", START_POSITION);
+
+            if (current != null) {
+                telemetry.addData("Robot X", current.x());
+                telemetry.addData("Robot Y", current.y());
+                telemetry.addData(
+                        "Robot Heading",
+                        Math.toDegrees(current.heading())
+                );
+            }
+
+            telemetry.update();
+            idle();
+        }
+
+        if (isStopRequested()) return;
 
         previousX = gamepad1.x;
 
@@ -108,6 +125,11 @@ public class biobuzzTeleOp extends LinearOpMode {
             boolean intake = gamepad1.right_trigger > 0.5;
             boolean outtake = gamepad1.left_trigger > 0.5;
             boolean spit = gamepad1.right_bumper;
+
+            boolean xPressed = gamepad1.x && !previousX;
+            previousX = gamepad1.x;
+
+            boolean cancelRequested = gamepad1.a;
 
             if (intake) {
                 robot.intake.setPower(0.85);
@@ -124,11 +146,6 @@ public class biobuzzTeleOp extends LinearOpMode {
                 robot.outtake.setPower(0);
                 robot.transfer.setPower(0);
             }
-
-            boolean xPressed = gamepad1.x && !previousX;
-            previousX = gamepad1.x;
-
-            boolean cancelRequested = gamepad1.b;
 
             if (cancelRequested) {
                 goingToFlower = false;
