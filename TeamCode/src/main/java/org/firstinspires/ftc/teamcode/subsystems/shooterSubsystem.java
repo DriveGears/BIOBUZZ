@@ -17,10 +17,10 @@ public class shooterSubsystem {
 
     /** Change either sign if an intake mechanism runs backward. */
     public static final double INTAKE_POWER = 1.0;
-    public static final double TRANSFER_POWER = 0.64;
+    public static final double TRANSFER_POWER = 1.0;
 
     /** Competition shooter speed. Distance-based RPM selection is intentionally disabled. */
-    public static final double COMPETITION_RPM = 2100.0;
+    public static final double COMPETITION_RPM = 2900.0;
 
     /** Distances and RPMs are paired. Measure new values for this year's mechanism. */
     public static final double[] SHOT_DISTANCE_IN = {

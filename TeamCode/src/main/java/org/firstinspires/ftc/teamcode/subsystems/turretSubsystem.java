@@ -27,7 +27,7 @@ public class turretSubsystem {
     public static final String TUNE_VERSION = "fast-v8-fusion-still";
 
     /** Limelight AprilTag pipeline number. */
-    public static final int APRILTAG_PIPELINE = 1;
+//    public static final int APRILTAG_PIPELINE = 1;
 
     public enum Alliance { RED, BLUE }
 
@@ -53,8 +53,8 @@ public class turretSubsystem {
     public static final double MOTOR_DIRECTION_SIGN = 1.0;
 
     /** Encoder safety limits (System 1 limits). */
-    public static final int MIN_TURRET_TICKS = -470;
-    public static final int MAX_TURRET_TICKS = 140;
+    public static final int MIN_TURRET_TICKS = -120;
+    public static final int MAX_TURRET_TICKS = 120;
     public static final double MAX_TURRET_POWER = 0.70;
 
     /** Camera geometry for calculating horizontal floor distance. */
@@ -353,7 +353,7 @@ public class turretSubsystem {
         turretMotor = robot.turret;
         // Never carry a stale command into this subsystem's initialization.
         turretMotor.setPower(0);
-        robot.limelight.pipelineSwitch(APRILTAG_PIPELINE);
+//        robot.limelight.pipelineSwitch(APRILTAG_PIPELINE);
         robot.limelight.setPollRateHz(100);
         robot.limelight.start();
         clock.reset();

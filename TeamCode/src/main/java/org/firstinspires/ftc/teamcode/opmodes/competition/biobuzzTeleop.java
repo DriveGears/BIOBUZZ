@@ -99,9 +99,9 @@ public abstract class biobuzzTeleop extends LinearOpMode {
             boolean spit = gamepad1.right_bumper;
 
             if (spit) {
-                robot.intake.setPower(-0.7);
+                robot.intake.setPower(-1);
             } else {
-                robot.intake.setPower(intakeToggle ? 0.7 : 0.0);
+                robot.intake.setPower(intakeToggle ? 1 : 0.0);
             }
 
             shooter.setShooterEnabled(outtakeToggle);
