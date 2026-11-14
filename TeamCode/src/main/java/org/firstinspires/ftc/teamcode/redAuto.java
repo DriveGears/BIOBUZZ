@@ -72,18 +72,19 @@ public class redAuto extends OpMode {
         return sequential(
                 instant(() -> {
                     shotSkipped = false;
+                    follower.stop();
                     shooter.setTargetRpm(shooterSubsystem.COMPETITION_RPM);
                     shooter.setShooterEnabled(true);
                     turret.setAutoAimEnabled(true);
                 }),
                 race(
                         waitUntil(() -> shooter.isAtSpeed() && turret.isAimReady()),
-                        waitMs(2500)
+                        waitMs(4500)
                 ),
                 conditional(
                         () -> shooter.isAtSpeed() && turret.isAimReady(),
                         sequential(
-                                instant(() -> robot.transfer.setPower(1.0)),
+                                instant(() -> robot.transfer.setPower(shooterSubsystem.TRANSFER_POWER)),
                                 waitMs(3000),
                                 instant(() -> robot.transfer.setPower(0))
                         ),
@@ -93,6 +94,7 @@ public class redAuto extends OpMode {
                     robot.transfer.setPower(0);
                     shooter.setShooterEnabled(false);
                     turret.setAutoAimEnabled(false);
+                    stopDrive();
                 })
         );
     }
@@ -118,7 +120,7 @@ public class redAuto extends OpMode {
         follower = Constants.create(hardwareMap);
         turret = new turretSubsystem(robot);
         shooter = new shooterSubsystem(robot);
-        turret.setAlliance(turretSubsystem.Alliance.BLUE);
+        turret.setAlliance(turretSubsystem.Alliance.RED);
         shooter.setTargetRpm(shooterSubsystem.COMPETITION_RPM);
         follower.setPose(startPose);
         follower.update();
@@ -169,6 +171,7 @@ public class redAuto extends OpMode {
                 turret.getAlliance(), turret.getSelectedClusterName());
         telemetry.addData("CELL Roll", turret.getSelectedClusterRollDeg());
         telemetry.addData("Aim Ready", turret.isAimReady());
+        telemetry.addData("Chassis Aim Assist", "DISABLED");
         telemetry.addData("Shooter RPM", "target=%.0f actual=%.0f",
                 shooter.getTargetRpm(), shooter.getActualRpm());
         telemetry.addData("Intake", robot.intake.getPower() != 0
@@ -190,5 +193,12 @@ public class redAuto extends OpMode {
         if (follower != null) follower.stop();
         if (turret != null) turret.stop();
         if (shooter != null) shooter.stop();
+    }
+
+    private void stopDrive() {
+        robot.lf.setPower(0);
+        robot.lb.setPower(0);
+        robot.rf.setPower(0);
+        robot.rb.setPower(0);
     }
 }

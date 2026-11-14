@@ -48,7 +48,6 @@ public class Constants {
     });
     public static ForesightConfig foresightConfig = new ForesightConfig(
             c -> {
-                // 1. Smooth forward movement, but higher lateral gains to overcome mecanum side-friction
                 Controller primaryTranslationalForward = Controller.proportional(0.05);
                 Controller secondaryTranslationalForward = Controller.proportional(0.12);
                 Controller primaryTranslationalLateral = Controller.proportional(0.22);
@@ -57,14 +56,11 @@ public class Constants {
                 c.forwardTranslational.set(Controller.piecewise(secondaryTranslationalForward).put(2.5, primaryTranslationalForward));
                 c.strafeTranslational.set(Controller.piecewise(secondaryTranslationalLateral).put(2.5, primaryTranslationalLateral));
 
-                // 2. ZEROED OUT FRICTION FEEDFORWARD
                 c.coast.set(Controller.proportionalFeedforward(0.0));
                 c.brake.set(Controller.proportionalFeedforward(0.0));
 
-                // 3. Lowered heading feedback to eliminate rotational jitter/shaking
                 c.headingFeedback.set(Controller.proportional(1.5));
 
-                // 4. Heavily dampened the brake vectors [0]
                 c.headingBrakeCoefficients.set(Vector2D.cartesian(0.1, -0.01));
                 c.linearBrakeCoefficients.set(Matrix.diag(0.05, 0.02));
                 c.quadraticBrakeCoefficients.set(Matrix.diag(0.0, 0.0));

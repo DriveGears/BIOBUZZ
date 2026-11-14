@@ -73,7 +73,7 @@ public class AUTO extends OpMode {
                         () -> shooter.isAtSpeed() && turret.isAimReady(),
                         sequential(
                                 instant(() -> {
-                                    robot.transfer.setPower(1.0);
+                                    robot.transfer.setPower(shooterSubsystem.TRANSFER_POWER);
                                 }),
                                 waitMs(1600),
                                 instant(this::stopFeed)

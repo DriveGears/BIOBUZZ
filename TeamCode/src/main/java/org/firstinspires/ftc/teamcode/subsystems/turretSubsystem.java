@@ -42,7 +42,7 @@ public class turretSubsystem {
     public static final double[] TAG_HEIGHTS_IN = {};
 
     /** Encoder ticks per degree (System 1 calibrated value). */
-    public static final double TICKS_PER_DEGREE = 1.78;
+    public static final double TICKS_PER_DEGREE = 1.81;
 
     /** Flip this sign if the turret corrects away from the target. */
     public static final double AIM_DIRECTION_SIGN = 1.0;
@@ -51,7 +51,7 @@ public class turretSubsystem {
     public static final double MOTOR_DIRECTION_SIGN = 1.0;
 
     /** Encoder safety limits (System 1 limits). */
-    public static final int MIN_TURRET_TICKS = -140;
+    public static final int MIN_TURRET_TICKS = -470;
     public static final int MAX_TURRET_TICKS = 140;
     public static final double MAX_TURRET_POWER = 0.70;
 
@@ -641,8 +641,9 @@ public class turretSubsystem {
             targetVelocityTicksPerSecond = 0;
         }
 
-        targetTicks = clamp(targetTicks, MIN_TURRET_TICKS, MAX_TURRET_TICKS);
-        double positionError = targetTicks - currentTicks;
+        double boundedTargetTicks = clamp(
+                targetTicks, MIN_TURRET_TICKS, MAX_TURRET_TICKS);
+        double positionError = boundedTargetTicks - currentTicks;
         double velocityError = targetVelocityTicksPerSecond
                 - filteredMotorVelocityTicksPerSecond;
 
@@ -1102,7 +1103,9 @@ public class turretSubsystem {
     public int getCurrentTicks() { return robot.getTurretPositionTicks(); }
     public double getTargetTicks() { return targetTicks; }
     public double getPositionErrorTicks() {
-        return targetTicks - robot.getTurretPositionTicks();
+        int currentTicks = robot.getTurretPositionTicks();
+        return clamp(targetTicks, MIN_TURRET_TICKS, MAX_TURRET_TICKS)
+                - currentTicks;
     }
     public double getFilteredMotorVelocityTicksPerSecond() {
         return filteredMotorVelocityTicksPerSecond;
