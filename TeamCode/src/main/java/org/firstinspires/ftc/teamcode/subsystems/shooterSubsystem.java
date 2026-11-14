@@ -31,7 +31,7 @@ public class shooterSubsystem {
     };
 
     // Software PIDF Gains (RUN_WITHOUT_ENCODER motor mode)
-    private static final double KP = 0.0020;
+    private static final double KP = 0.0030; //0.0020
     private static final double KI = 0.0005;
     private static final double KD = 0.0001;
     private static final double KF = 0.000435;

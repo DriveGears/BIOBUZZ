@@ -67,48 +67,69 @@ public class redAuto extends OpMode {
         );
     }
 
-    /** Spin up and auto-aim; only feed if both the flywheel and turret are ready. */
     private Command shootAtUpwardCell() {
         return sequential(
                 instant(() -> {
                     shotSkipped = false;
-                    follower.stop();
                     shooter.setTargetRpm(shooterSubsystem.COMPETITION_RPM);
                     shooter.setShooterEnabled(true);
+                    robot.intake.setPower(0.85); // Turn on intake along with outtake
                     turret.setAutoAimEnabled(true);
                 }),
                 race(
                         waitUntil(() -> shooter.isAtSpeed() && turret.isAimReady()),
-                        waitMs(4500)
+                        waitMs(2500)
                 ),
                 conditional(
                         () -> shooter.isAtSpeed() && turret.isAimReady(),
                         sequential(
-                                instant(() -> robot.transfer.setPower(shooterSubsystem.TRANSFER_POWER)),
+                                waitMs(150), // Brief delay (a few ms) so intake & outtake lead the transfer
+                                instant(() -> robot.transfer.setPower(1.0)),
                                 waitMs(3000),
-                                instant(() -> robot.transfer.setPower(0))
+                                instant(() -> {
+                                    robot.transfer.setPower(0);
+                                    robot.intake.setPower(0);
+                                })
                         ),
                         instant(() -> shotSkipped = true)
                 ),
                 instant(() -> {
                     robot.transfer.setPower(0);
+                    robot.intake.setPower(0);
                     shooter.setShooterEnabled(false);
                     turret.setAutoAimEnabled(false);
-                    stopDrive();
                 })
         );
     }
 
     private Command autoRoutine() {
         return sequential(
-                waitMs(3000),
+                // 1. Turn on outtake at the very beginning
+                instant(() -> {
+                    shooter.setTargetRpm(300);
+                    shooter.setShooterEnabled(true);
+                }),
+                // 2. Wait until outtake reaches 2100 RPM
+                waitUntil(() -> shooter.getActualRpm() >= 2100),
+                // 3. Turn on intake and transfer
+                instant(() -> {
+                    robot.intake.setPower(0.85);
+                    robot.transfer.setPower(1.0);
+                }),
+                waitMs(1500),
+                // 4. Turn OFF outtake and transfer while moving from startPose to flowerPose, keeping intake ON
+                instant(() -> {
+                    shooter.setShooterEnabled(false);
+                    robot.transfer.setPower(0);
+                    robot.intake.setPower(0.85);
+                }),
                 follow(follower, startToScore()),
                 collectFromFlower(),
                 follow(follower, flowerToScore()),
                 shootAtUpwardCell(),
-                follow(follower, park()),
-                waitMs(1000),
-                follow(follower, returnPose()) //only so i dont have to get up
+                follow(follower, park())
+//                waitMs(1000),
+//                follow(follower, returnPose()) //only so i dont have to get up
         );
     }
 
@@ -120,7 +141,7 @@ public class redAuto extends OpMode {
         follower = Constants.create(hardwareMap);
         turret = new turretSubsystem(robot);
         shooter = new shooterSubsystem(robot);
-        turret.setAlliance(turretSubsystem.Alliance.RED);
+        turret.setAlliance(turretSubsystem.Alliance.BLUE);
         shooter.setTargetRpm(shooterSubsystem.COMPETITION_RPM);
         follower.setPose(startPose);
         follower.update();
@@ -134,9 +155,7 @@ public class redAuto extends OpMode {
 
     @Override
     public void init_loop() {
-        if (gamepad1.b) turret.setAlliance(turretSubsystem.Alliance.RED);
-        if (gamepad1.x) turret.setAlliance(turretSubsystem.Alliance.BLUE);
-
+        turret.setAlliance(turretSubsystem.Alliance.RED);
         follower.update();
         telemetry.addData("Status", "Ready - Keep robot still before Play");
         telemetry.addData("Alliance", turret.getAlliance());
@@ -171,7 +190,6 @@ public class redAuto extends OpMode {
                 turret.getAlliance(), turret.getSelectedClusterName());
         telemetry.addData("CELL Roll", turret.getSelectedClusterRollDeg());
         telemetry.addData("Aim Ready", turret.isAimReady());
-        telemetry.addData("Chassis Aim Assist", "DISABLED");
         telemetry.addData("Shooter RPM", "target=%.0f actual=%.0f",
                 shooter.getTargetRpm(), shooter.getActualRpm());
         telemetry.addData("Intake", robot.intake.getPower() != 0
@@ -193,12 +211,5 @@ public class redAuto extends OpMode {
         if (follower != null) follower.stop();
         if (turret != null) turret.stop();
         if (shooter != null) shooter.stop();
-    }
-
-    private void stopDrive() {
-        robot.lf.setPower(0);
-        robot.lb.setPower(0);
-        robot.rf.setPower(0);
-        robot.rb.setPower(0);
     }
 }

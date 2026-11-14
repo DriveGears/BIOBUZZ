@@ -27,7 +27,7 @@ public class turretSubsystem {
     public static final String TUNE_VERSION = "fast-v8-fusion-still";
 
     /** Limelight AprilTag pipeline number. */
-//    public static final int APRILTAG_PIPELINE = 1;
+    public static final int APRILTAG_PIPELINE = 1;
 
     public enum Alliance { RED, BLUE }
 
@@ -67,7 +67,7 @@ public class turretSubsystem {
      * are relative to the CELL opening center, which is the official aim origin.
      */
     public static final double[] CLUSTER_TAG_X_OFFSETS_IN = {
-            -6.50, -2.75, 2.75, 6.50
+            -8.50, -4.75, 0.75, 4.50
     };
     public static final double CLUSTER_AIM_POINT_FORWARD_OF_TAGS_IN = 7.1874;
     /** Official SDK Z offset: tag centers are this far below the opening origin. */
@@ -353,7 +353,7 @@ public class turretSubsystem {
         turretMotor = robot.turret;
         // Never carry a stale command into this subsystem's initialization.
         turretMotor.setPower(0);
-//        robot.limelight.pipelineSwitch(APRILTAG_PIPELINE);
+        robot.limelight.pipelineSwitch(APRILTAG_PIPELINE);
         robot.limelight.setPollRateHz(100);
         robot.limelight.start();
         clock.reset();
