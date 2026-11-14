@@ -17,7 +17,10 @@ public class shooterSubsystem {
 
     /** Change either sign if an intake mechanism runs backward. */
     public static final double INTAKE_POWER = 1.0;
-    public static final double TRANSFER_POWER = 1.0;
+    public static final double TRANSFER_POWER = 0.64;
+
+    /** Competition shooter speed. Distance-based RPM selection is intentionally disabled. */
+    public static final double COMPETITION_RPM = 2100.0;
 
     /** Distances and RPMs are paired. Measure new values for this year's mechanism. */
     public static final double[] SHOT_DISTANCE_IN = {
@@ -51,7 +54,7 @@ public class shooterSubsystem {
 
     private final Hardware robot;
     private boolean enabled;
-    private double targetRpm = SHOT_RPM[0];
+    private double targetRpm = COMPETITION_RPM;
     private double commandedRpm;
     private double distanceBucketIn = Double.NaN;
     private int readyLoops;
@@ -71,9 +74,15 @@ public class shooterSubsystem {
     }
 
     public void setEnabled(boolean enabled) {
-        this.enabled = enabled;
+        setShooterEnabled(enabled);
         robot.intake.setPower(enabled ? INTAKE_POWER : 0);
         robot.transfer.setPower(enabled ? TRANSFER_POWER : 0);
+    }
+
+    /** Controls only the flywheel so TeleOp/Auto can operate intake and transfer separately. */
+    public void setShooterEnabled(boolean enabled) {
+        if (this.enabled == enabled) return;
+        this.enabled = enabled;
 
         if (!enabled) {
             commandedRpm = 0;
@@ -90,12 +99,8 @@ public class shooterSubsystem {
 
     /** Uses the calibration table to select an RPM for a measured/predicted distance. */
     public void setTargetForDistance(double distanceIn) {
-        if (Double.isNaN(distanceBucketIn)
-                || Math.abs(distanceIn - distanceBucketIn) > DISTANCE_HYSTERESIS_IN) {
-            distanceBucketIn = Math.round(distanceIn / DISTANCE_BUCKET_IN)
-                    * DISTANCE_BUCKET_IN;
-        }
-        setTargetRpm(rpmForDistance(distanceBucketIn));
+        distanceBucketIn = distanceIn;
+        setTargetRpm(COMPETITION_RPM);
     }
 
     /** Useful for test tuning without the camera. */
