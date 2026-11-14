@@ -36,15 +36,38 @@ public class Constants {
         c.manualBrakeMode.set(true);
     });
 
+    /**
+     * Pinpoint settings. THIS is the single source of truth for pod offsets,
+     * directions and resolution: both Pedro's Follower and our Hardware class
+     * (turret/TeleOp) read these values.
+     *
+     * xPodOffset: sideways offset of the forward-measuring pod, left = +.
+     * yPodOffset: forward offset of the strafe-measuring pod, forward = +.
+     *
+     * LINEAR CALIBRATION: after the straight-line test, uncomment and paste the
+     * value tools/analyze_odometry_log.py prints (ticks per mm):
+     *     c.ticksPerUnit.set(java.util.OptionalDouble.of(XX.XXXXX));
+     *     c.encoderResolutionUnit.set(DistanceUnit.MM);
+     */
     public static PinpointConfig localizerConfig = new PinpointConfig(c -> {
         c.name.set("odo");
         c.podType.set(GoBildaPinpointDriver.GoBildaOdometryPods.goBILDA_4_BAR_POD);
-        c.xPodOffset.set(0.644494604876661);
-        c.yPodOffset.set(-1.5708831727035402);
+        // Fitted 2026-11-13 from spin logs at the FACTORY resolution (correct scale): 8 blocks from two
+        // runs -> xOff -0.46 (sd ~0.10), yOff -0.85 (sd ~0.22). Y differs by spin direction (CW ~-0.65,
+        // CCW ~-1.1) in both runs, so treat Y as good to about +-0.2 in. Pose wobble 1.4 in -> ~0.2 in.
+        // History: original 0.644494604876661 / -1.5708831727035402 (wrong sign for X);
+        // fits made at the wrong 16.2/16.73 scale gave -0.64 / -1.20.
+        c.xPodOffset.set(-0.46);
+        c.yPodOffset.set(-0.85);
         c.xPodDirection.set(GoBildaPinpointDriver.EncoderDirection.FORWARD);
         c.yPodDirection.set(GoBildaPinpointDriver.EncoderDirection.REVERSED);
         c.globalDistanceUnit.set(DistanceUnit.INCH);
         c.offsetUnits.set(DistanceUnit.INCH);
+        // Linear calibration: NO override. The FACTORY resolution (19.894 ticks/mm) is correct: tape-marked
+        // 96 in legs read 95.97 in (sd 0.25, ratio 0.9997) at the factory scale. Earlier "corrections"
+        // (16.20, 16.73) were wrong: those legs had not been driven the full distance.
+        // c.ticksPerUnit.set(java.util.OptionalDouble.of(19.89437));
+        // c.encoderResolutionUnit.set(DistanceUnit.MM);
     });
 
     public static ForesightConfig foresightConfig = new ForesightConfig(
