@@ -9,7 +9,7 @@ import org.firstinspires.ftc.teamcode.subsystems.shooterSubsystem;
 import org.firstinspires.ftc.teamcode.subsystems.turretSubsystem;
 
 @TeleOp(name = "biobuzz testing teleop", group = "Testing")
-public class turret_biobuzzTestTeleOp extends LinearOpMode {
+public class turretTest extends LinearOpMode {
 
     private static final double DRIVE_SPEED = 0.80;
     private static final double STRAFE_MULTIPLIER = 1.10;
@@ -69,7 +69,7 @@ public class turret_biobuzzTestTeleOp extends LinearOpMode {
                 if (turret.hasDistance()) {
                     shooter.setTargetForDistance(turret.getImpactDistanceIn());
                 } else {
-                    shooter.setTargetRpm(2175); // default corner shot RPM
+                    shooter.setTargetRpm(shooterSubsystem.COMPETITION_RPM);
                 }
                 shooter.update(dtSeconds);
 

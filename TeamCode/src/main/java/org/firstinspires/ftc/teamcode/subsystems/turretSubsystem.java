@@ -27,8 +27,13 @@ public class turretSubsystem {
     /** Limelight AprilTag pipeline number. */
     public static final int APRILTAG_PIPELINE = 1;
 
-    /** First ID of the scoring cluster: red is 30, blue is 42. */
-    public static int TARGET_CLUSTER_FIRST_ID = 42;
+    public enum Alliance { RED, BLUE }
+
+    /** First AprilTag ID in each four-tag CELL cluster. */
+    public static final int RED_SCORING_CLUSTER_FIRST_ID = 30;
+    public static final int RED_AUDIENCE_CLUSTER_FIRST_ID = 34;
+    public static final int BLUE_AUDIENCE_CLUSTER_FIRST_ID = 38;
+    public static final int BLUE_SCORING_CLUSTER_FIRST_ID = 42;
 
     /** Per-tag optical corrections, in the same order. Positive subtracts from measured Tx. */
     public static final double[] TAG_AIM_OFFSETS_DEG = {};
@@ -83,7 +88,7 @@ public class turretSubsystem {
     public static boolean LATENCY_COMPENSATION_ENABLED = false;
 
     /** Motion prediction: tune flight time after basic stationary aiming works. */
-    public static boolean PREDICTION_ENABLED = false;
+    public static boolean PREDICTION_ENABLED = true;
     public static double FIXED_FLIGHT_TIME_S = 0.12;
     public static double TOF_PER_INCH_S = 0.0055;
     public static double FIXED_SHOT_DELAY_S = 0.06;
@@ -133,7 +138,9 @@ public class turretSubsystem {
     private boolean autoAimEnabled;
     private double manualPower;
     private int selectedTagId = -1;
-    private int activeTargetClusterFirstId = TARGET_CLUSTER_FIRST_ID;
+    private Alliance alliance = Alliance.BLUE;
+    private int selectedClusterFirstId = -1;
+    private double selectedClusterRollDeg = Double.NaN;
     private String visibleTagIds = "none";
     private int visibleTagCount;
     private boolean clusterGeometryValid;
@@ -218,6 +225,17 @@ public class turretSubsystem {
         manualPower = clamp(power, -MAX_TURRET_POWER, MAX_TURRET_POWER);
     }
 
+    public void setAlliance(Alliance alliance) {
+        if (alliance == null || this.alliance == alliance) return;
+        this.alliance = alliance;
+        selectedClusterFirstId = -1;
+        selectedClusterRollDeg = Double.NaN;
+        selectedTagId = -1;
+        targetVisible = false;
+        targetTicksInitialized = false;
+        resetMeasurementHistory();
+    }
+
     /**
      * Convenience entry point for adding the turret to another TeleOp. This
      * also updates Pinpoint odometry and Limelight tracking internally.
@@ -252,13 +270,6 @@ public class turretSubsystem {
         double dt = clamp(dtSeconds, 0.001, 0.100);
         double nowMs = clock.milliseconds();
         int currentTicks = robot.getTurretPositionTicks();
-        if (activeTargetClusterFirstId != TARGET_CLUSTER_FIRST_ID) {
-            activeTargetClusterFirstId = TARGET_CLUSTER_FIRST_ID;
-            selectedTagId = -1;
-            targetVisible = false;
-            targetTicksInitialized = false;
-            resetMeasurementHistory();
-        }
         updateFilteredMotorVelocity();
 
         updateOdometry();
@@ -692,19 +703,100 @@ public class turretSubsystem {
 
     private List<LLResultTypes.FiducialResult> selectClusterTags(
             List<LLResultTypes.FiducialResult> tags) {
-        List<LLResultTypes.FiducialResult> selected = new ArrayList<>();
-        if (tags == null || tags.isEmpty()) return selected;
+        List<LLResultTypes.FiducialResult> empty = new ArrayList<>();
+        if (tags == null || tags.isEmpty()) {
+            selectedClusterRollDeg = Double.NaN;
+            return empty;
+        }
 
-        int representativeId = Integer.MAX_VALUE;
+        int firstClusterId = alliance == Alliance.RED
+                ? RED_SCORING_CLUSTER_FIRST_ID : BLUE_AUDIENCE_CLUSTER_FIRST_ID;
+        int secondClusterId = alliance == Alliance.RED
+                ? RED_AUDIENCE_CLUSTER_FIRST_ID : BLUE_SCORING_CLUSTER_FIRST_ID;
+        List<LLResultTypes.FiducialResult> firstCluster = new ArrayList<>();
+        List<LLResultTypes.FiducialResult> secondCluster = new ArrayList<>();
+
         for (LLResultTypes.FiducialResult tag : tags) {
-            if (!isAllowedTag(tag.getFiducialId())) continue;
-            selected.add(tag);
-            representativeId = Math.min(representativeId, tag.getFiducialId());
+            int clusterId = clusterFirstIdForTag(tag.getFiducialId());
+            if (clusterId == firstClusterId) firstCluster.add(tag);
+            if (clusterId == secondClusterId) secondCluster.add(tag);
         }
-        if (!selected.isEmpty()) {
-            selectedTagId = representativeId;
+
+        ClusterCandidate first = createClusterCandidate(firstClusterId, firstCluster);
+        ClusterCandidate second = createClusterCandidate(secondClusterId, secondCluster);
+        ClusterCandidate selected = chooseScorableCluster(first, second);
+        if (selected == null) {
+            selectedClusterRollDeg = Double.NaN;
+            return empty;
         }
-        return selected;
+
+        if (selectedClusterFirstId != selected.firstId) {
+            selectedClusterFirstId = selected.firstId;
+            targetTicksInitialized = false;
+            resetMeasurementHistory();
+        }
+        selectedClusterRollDeg = selected.rollDeg;
+        selectedTagId = Integer.MAX_VALUE;
+        for (LLResultTypes.FiducialResult tag : selected.tags) {
+            selectedTagId = Math.min(selectedTagId, tag.getFiducialId());
+        }
+        return selected.tags;
+    }
+
+    private ClusterCandidate createClusterCandidate(
+            int firstId, List<LLResultTypes.FiducialResult> tags) {
+        if (tags.isEmpty()) return null;
+
+        double sinRoll = 0;
+        double cosRoll = 0;
+        double totalArea = 0;
+        int rollSamples = 0;
+        for (LLResultTypes.FiducialResult tag : tags) {
+            if (tag.getTargetPoseCameraSpace() == null
+                    || tag.getTargetPoseCameraSpace().getOrientation() == null) continue;
+            double rollDeg = tag.getTargetPoseCameraSpace().getOrientation()
+                    .getRoll(AngleUnit.DEGREES);
+            if (!Double.isFinite(rollDeg)) continue;
+            double rollRad = Math.toRadians(rollDeg);
+            sinRoll += Math.sin(rollRad);
+            cosRoll += Math.cos(rollRad);
+            totalArea += Math.max(0, tag.getTargetArea());
+            rollSamples++;
+        }
+        if (rollSamples == 0) return null;
+
+        double averageRollDeg = Math.toDegrees(Math.atan2(sinRoll, cosRoll));
+        return new ClusterCandidate(firstId, tags, averageRollDeg, totalArea);
+    }
+
+    private ClusterCandidate chooseScorableCluster(
+            ClusterCandidate first, ClusterCandidate second) {
+        boolean firstScorable = first != null && Math.abs(first.rollDeg) < 90.0;
+        boolean secondScorable = second != null && Math.abs(second.rollDeg) < 90.0;
+        if (firstScorable && !secondScorable) return first;
+        if (secondScorable && !firstScorable) return second;
+        if (!firstScorable) return null;
+
+        // Both should not normally be upright. Prefer the stronger observation.
+        if (first.tags.size() != second.tags.size()) {
+            return first.tags.size() > second.tags.size() ? first : second;
+        }
+        return first.totalArea >= second.totalArea ? first : second;
+    }
+
+    private static class ClusterCandidate {
+        final int firstId;
+        final List<LLResultTypes.FiducialResult> tags;
+        final double rollDeg;
+        final double totalArea;
+
+        ClusterCandidate(int firstId, List<LLResultTypes.FiducialResult> tags,
+                double rollDeg, double totalArea) {
+            this.firstId = firstId;
+            this.tags = tags;
+            this.rollDeg = rollDeg;
+            this.totalArea = totalArea;
+        }
     }
 
     /** Horizontal aim to the official cluster origin, not to an individual tag. */
@@ -862,11 +954,17 @@ public class turretSubsystem {
     }
 
     private boolean isAllowedTag(int id) {
-        return id >= TARGET_CLUSTER_FIRST_ID && id < TARGET_CLUSTER_FIRST_ID + 4;
+        if (alliance == Alliance.RED) return id >= 30 && id <= 37;
+        return id >= 38 && id <= 45;
+    }
+
+    private int clusterFirstIdForTag(int id) {
+        if (id < 30 || id > 45) return -1;
+        return 30 + ((id - 30) / 4) * 4;
     }
 
     private int indexOfTag(int id) {
-        int index = id - TARGET_CLUSTER_FIRST_ID;
+        int index = id - selectedClusterFirstId;
         return index >= 0 && index < 4 ? index : -1;
     }
 
@@ -958,6 +1056,18 @@ public class turretSubsystem {
     public boolean hasDistance() { return distanceInitialized; }
     public boolean isAimReady() { return aimReady; }
     public int getSelectedTagId() { return selectedTagId; }
+    public Alliance getAlliance() { return alliance; }
+    public int getSelectedClusterFirstId() { return selectedClusterFirstId; }
+    public double getSelectedClusterRollDeg() { return selectedClusterRollDeg; }
+    public String getSelectedClusterName() {
+        switch (selectedClusterFirstId) {
+            case RED_SCORING_CLUSTER_FIRST_ID: return "RED SCORING";
+            case RED_AUDIENCE_CLUSTER_FIRST_ID: return "RED AUDIENCE";
+            case BLUE_AUDIENCE_CLUSTER_FIRST_ID: return "BLUE AUDIENCE";
+            case BLUE_SCORING_CLUSTER_FIRST_ID: return "BLUE SCORING";
+            default: return "NONE";
+        }
+    }
     public String getVisibleTagIds() { return visibleTagIds; }
     public int getVisibleTagCount() { return visibleTagCount; }
     public boolean isClusterGeometryValid() { return clusterGeometryValid; }

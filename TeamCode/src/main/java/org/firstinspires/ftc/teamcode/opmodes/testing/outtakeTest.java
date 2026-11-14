@@ -51,7 +51,7 @@ public class outtakeTest extends LinearOpMode {
         if (flywheel != null) {
             flywheel.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
             flywheel.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
-            flywheel.setDirection(DcMotorSimple.Direction.REVERSE);
+            flywheel.setDirection(DcMotorSimple.Direction.FORWARD);
         }
         if (transfer != null) {
             transfer.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
