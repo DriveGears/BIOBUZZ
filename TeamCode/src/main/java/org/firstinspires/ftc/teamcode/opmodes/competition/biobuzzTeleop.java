@@ -11,6 +11,9 @@ import org.firstinspires.ftc.teamcode.subsystems.turretSubsystem;
 /** Shared implementation for the alliance-specific competition TeleOps. */
 public abstract class biobuzzTeleop extends LinearOpMode {
 
+    private static final double INTAKE_POWER = 1.0;
+    private static final double TRANSFER_POWER = 1.0;
+
     private FlightRecorder rec;
     private boolean lastFusionToggle = false;
     private turretSubsystem turret;
@@ -36,6 +39,8 @@ public abstract class biobuzzTeleop extends LinearOpMode {
         turret = new turretSubsystem(robot);
         shooter = new shooterSubsystem(robot);
         loopTimer = new ElapsedTime();
+        robot.intake.setPower(0);
+        robot.transfer.setPower(0);
 
         rec = FlightRecorder.start("teleop");
         java.util.Map<String, String> cfg = turretSubsystem.configSnapshot();
@@ -64,6 +69,7 @@ public abstract class biobuzzTeleop extends LinearOpMode {
             turret.stop();
             shooter.stop();
             robot.intake.setPower(0);
+            robot.transfer.setPower(0);
             rec.close();
             return;
         }
@@ -99,16 +105,16 @@ public abstract class biobuzzTeleop extends LinearOpMode {
             boolean spit = gamepad1.right_bumper;
 
             if (spit) {
-                robot.intake.setPower(-1);
+                robot.intake.setPower(-INTAKE_POWER);
             } else {
-                robot.intake.setPower(intakeToggle ? 1 : 0.0);
+                robot.intake.setPower(intakeToggle ? INTAKE_POWER : 0.0);
             }
 
             shooter.setShooterEnabled(outtakeToggle);
             shooter.update(dtSeconds);
             boolean transferFeeding = gamepad1.a;
             if (transferFeeding) {
-                robot.transfer.setPower(shooterSubsystem.TRANSFER_POWER);
+                robot.transfer.setPower(TRANSFER_POWER);
             } else {
                 robot.transfer.setPower(0);
             }
@@ -199,6 +205,7 @@ public abstract class biobuzzTeleop extends LinearOpMode {
             turret.stop();
             shooter.stop();
             robot.intake.setPower(0);
+            robot.transfer.setPower(0);
             rec.event("OPMODE_END");
             rec.close();
         }

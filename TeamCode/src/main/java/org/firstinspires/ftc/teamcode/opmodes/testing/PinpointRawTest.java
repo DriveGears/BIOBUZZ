@@ -1,6 +1,7 @@
 package org.firstinspires.ftc.teamcode.opmodes.testing;
 
 import com.qualcomm.hardware.gobilda.GoBildaPinpointDriver;
+import com.qualcomm.robotcore.eventloop.opmode.Disabled;
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 
@@ -18,6 +19,7 @@ import java.util.List;
  *
  * A (optional): run resetPosAndIMU() once (a stock driver write) and watch the status.
  */
+@Disabled
 @TeleOp(name = "PINPOINT RAW TEST", group = "TeleOp")
 public class PinpointRawTest extends LinearOpMode {
 
