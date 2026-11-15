@@ -27,7 +27,7 @@ public class shooterSubsystem {
     };
 
     // Competition PIDF defaults (RUN_WITHOUT_ENCODER motor mode).
-    public static final double DEFAULT_KP = 0.0014; // 0.003
+    public static final double DEFAULT_KP = 0.003; // 0.0014
     public static final double DEFAULT_KI = 0.0005;
     public static final double DEFAULT_KD = 0.0; // 0.0001
     public static final double DEFAULT_KF = 0.0005; // 0.000435
