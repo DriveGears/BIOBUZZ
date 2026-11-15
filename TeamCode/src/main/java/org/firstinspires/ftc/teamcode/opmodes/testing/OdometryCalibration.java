@@ -1,6 +1,7 @@
 package org.firstinspires.ftc.teamcode.opmodes.testing;
 
 import com.qualcomm.hardware.gobilda.GoBildaPinpointDriver;
+import com.qualcomm.robotcore.eventloop.opmode.Disabled;
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
@@ -22,6 +23,7 @@ import java.util.Locale;
  *   X  : re-zero IMU + pose (robot must be still)
  *   Left stick / right stick X : drive (mecanum, 40%)
  */
+@Disabled
 @TeleOp(name = "ODO CALIBRATION", group = "TeleOp")
 public class OdometryCalibration extends LinearOpMode {
 

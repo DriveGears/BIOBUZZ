@@ -4,7 +4,7 @@ import com.qualcomm.robotcore.hardware.DcMotor;
 
 import org.firstinspires.ftc.teamcode.hardware.Hardware;
 
-/** Controls OUTTAKE RPM using software PIDF in RUN_WITHOUT_ENCODER mode and runs intake/transfer. */
+/** Controls flywheel RPM using software PIDF in RUN_WITHOUT_ENCODER mode. */
 public class shooterSubsystem {
 
     // ========================= VALUES TO CALIBRATE =========================
@@ -14,10 +14,6 @@ public class shooterSubsystem {
 
     /** Motor revolutions per OUTTAKE revolution. Use 1.0 for a direct drive. */
     public static final double MOTOR_REVS_PER_OUTTAKE_REV = 1.0;
-
-    /** Change either sign if an intake mechanism runs backward. */
-    public static final double INTAKE_POWER = 1.0;
-    public static final double TRANSFER_POWER = 1.0;
 
     /** Competition shooter speed. Distance-based RPM selection is intentionally disabled. */
     public static final double COMPETITION_RPM = 2900.0;
@@ -30,12 +26,16 @@ public class shooterSubsystem {
             1500, 1500, 1565, 1810, 1855, 2070, 2170, 2185, 2280, 2615, 2680
     };
 
-    // Software PIDF Gains (RUN_WITHOUT_ENCODER motor mode)
-    private static final double KP = 0.0030; //0.0020
-    private static final double KI = 0.0005;
-    private static final double KD = 0.0001;
-    private static final double KF = 0.000435;
+    // Competition PIDF defaults (RUN_WITHOUT_ENCODER motor mode).
+    public static final double DEFAULT_KP = 0.0014; // 0.003
+    public static final double DEFAULT_KI = 0.0005;
+    public static final double DEFAULT_KD = 0.0; // 0.0001
+    public static final double DEFAULT_KF = 0.0005; // 0.000435
     private static final double MAX_INTEGRAL_SUM = 200.0;
+
+    // Full-range servo positions for goBILDA RGB Indicator Light 3118-0808-0002.
+    private static final double LED_RED_POSITION = 0.300;   // 1100 us
+    private static final double LED_GREEN_POSITION = 0.500; // 1500 us
 
     /** Maximum allowed request and how quickly the commanded RPM may change. */
     public static final double MAX_RPM = 3400.0;
@@ -62,6 +62,23 @@ public class shooterSubsystem {
 
     private double integralSum = 0.0;
     private double lastError = 0.0;
+    private double kP = DEFAULT_KP;
+    private double kI = DEFAULT_KI;
+    private double kD = DEFAULT_KD;
+    private double kF = DEFAULT_KF;
+
+    private double pTerm;
+    private double iTerm;
+    private double dTerm;
+    private double fTerm;
+    private double appliedPower;
+    private IndicatorState indicatorState;
+
+    private enum IndicatorState {
+        OFF,
+        SPINNING_UP,
+        READY
+    }
 
     public shooterSubsystem(Hardware robot) {
         if (SHOT_DISTANCE_IN.length != SHOT_RPM.length || SHOT_DISTANCE_IN.length == 0) {
@@ -70,16 +87,10 @@ public class shooterSubsystem {
 
         this.robot = robot;
         robot.outtake.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
-        stopMotors();
+        stopFlywheel();
+        setIndicator(IndicatorState.OFF);
     }
 
-    public void setEnabled(boolean enabled) {
-        setShooterEnabled(enabled);
-        robot.intake.setPower(enabled ? INTAKE_POWER : 0);
-        robot.transfer.setPower(enabled ? TRANSFER_POWER : 0);
-    }
-
-    /** Controls only the flywheel so TeleOp/Auto can operate intake and transfer separately. */
     public void setShooterEnabled(boolean enabled) {
         if (this.enabled == enabled) return;
         this.enabled = enabled;
@@ -88,8 +99,10 @@ public class shooterSubsystem {
             commandedRpm = 0;
             readyLoops = 0;
             atSpeed = false;
-            robot.outtake.setPower(0);
-            resetPID();
+            stopFlywheel();
+            setIndicator(IndicatorState.OFF);
+        } else {
+            setIndicator(IndicatorState.SPINNING_UP);
         }
     }
 
@@ -140,19 +153,20 @@ public class shooterSubsystem {
         double actualTPS = robot.outtake.getVelocity();
         double errorTPS = targetTPS - actualTPS;
 
-        double pTerm = KP * errorTPS;
+        pTerm = kP * errorTPS;
         integralSum += errorTPS * dt;
         integralSum = Math.max(-MAX_INTEGRAL_SUM, Math.min(MAX_INTEGRAL_SUM, integralSum));
-        double iTerm = KI * integralSum;
+        iTerm = kI * integralSum;
 
         double derivative = (errorTPS - lastError) / dt;
-        double dTerm = KD * derivative;
+        dTerm = kD * derivative;
 
-        double fTerm = KF * targetTPS;
+        fTerm = kF * targetTPS;
 
         double motorPower = pTerm + iTerm + dTerm + fTerm;
-        motorPower = clamp(motorPower, -1.0, 1.0);
-        robot.outtake.setPower(motorPower);
+        // A flywheel only needs forward power. Negative PID output would actively brake it.
+        appliedPower = clamp(motorPower, 0.0, 1.0);
+        robot.outtake.setPower(appliedPower);
         lastError = errorTPS;
 
         double actualRpm = getActualRpm();
@@ -162,6 +176,7 @@ public class shooterSubsystem {
             readyLoops = 0;
         }
         atSpeed = readyLoops >= READY_STABLE_LOOPS;
+        setIndicator(atSpeed ? IndicatorState.READY : IndicatorState.SPINNING_UP);
     }
 
     public boolean isAtSpeed() {
@@ -184,15 +199,71 @@ public class shooterSubsystem {
         return distanceBucketIn;
     }
 
-    public void stop() {
-        enabled = false;
-        stopMotors();
+    /** Changes this instance's gains immediately; intended for the temporary tuning OpMode. */
+    public void setPidfGains(double kP, double kI, double kD, double kF) {
+        this.kP = nonNegativeFinite(kP);
+        this.kI = nonNegativeFinite(kI);
+        this.kD = nonNegativeFinite(kD);
+        this.kF = nonNegativeFinite(kF);
+        resetPID();
     }
 
-    private void stopMotors() {
+    public void resetPidfGains() {
+        setPidfGains(DEFAULT_KP, DEFAULT_KI, DEFAULT_KD, DEFAULT_KF);
+    }
+
+    public double getKp() {
+        return kP;
+    }
+
+    public double getKi() {
+        return kI;
+    }
+
+    public double getKd() {
+        return kD;
+    }
+
+    public double getKf() {
+        return kF;
+    }
+
+    public double getPTerm() {
+        return pTerm;
+    }
+
+    public double getITerm() {
+        return iTerm;
+    }
+
+    public double getDTerm() {
+        return dTerm;
+    }
+
+    public double getFTerm() {
+        return fTerm;
+    }
+
+    public double getAppliedPower() {
+        return appliedPower;
+    }
+
+    public void stop() {
+        enabled = false;
+        commandedRpm = 0;
+        readyLoops = 0;
+        atSpeed = false;
+        stopFlywheel();
+        setIndicator(IndicatorState.OFF);
+    }
+
+    private void stopFlywheel() {
         robot.outtake.setPower(0);
-        robot.intake.setPower(0);
-        robot.transfer.setPower(0);
+        pTerm = 0;
+        iTerm = 0;
+        dTerm = 0;
+        fTerm = 0;
+        appliedPower = 0;
         resetPID();
     }
 
@@ -213,5 +284,23 @@ public class shooterSubsystem {
 
     private double clamp(double value, double min, double max) {
         return Math.max(min, Math.min(max, value));
+    }
+
+    private double nonNegativeFinite(double value) {
+        return Double.isFinite(value) ? Math.max(0, value) : 0;
+    }
+
+    private void setIndicator(IndicatorState newState) {
+        if (indicatorState == newState) return;
+        indicatorState = newState;
+
+        if (newState == IndicatorState.OFF) {
+            robot.shooterLed.setPwmDisable();
+            return;
+        }
+
+        robot.shooterLed.setPwmEnable();
+        robot.shooterLed.setPosition(newState == IndicatorState.READY
+                ? LED_GREEN_POSITION : LED_RED_POSITION);
     }
 }

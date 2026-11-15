@@ -1,5 +1,6 @@
 package org.firstinspires.ftc.teamcode.opmodes.testing;
 
+import com.qualcomm.robotcore.eventloop.opmode.Disabled;
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.util.ElapsedTime;
@@ -9,12 +10,15 @@ import org.firstinspires.ftc.teamcode.subsystems.FlightRecorder;
 import org.firstinspires.ftc.teamcode.subsystems.shooterSubsystem;
 import org.firstinspires.ftc.teamcode.subsystems.turretSubsystem;
 
+@Disabled
 @TeleOp(name = "biobuzz testing teleop", group = "Testing")
 public class turretTest extends LinearOpMode {
 
     private static final double DRIVE_SPEED = 0.80;
     private static final double STRAFE_MULTIPLIER = 1.10;
     private static final double MANUAL_TURRET_POWER = 0.25;
+    private static final double INTAKE_POWER = 1.0;
+    private static final double TRANSFER_POWER = 1.0;
 
     private boolean lastShooterButton = false;
     private boolean lastTurretZeroButton = false;
@@ -27,6 +31,8 @@ public class turretTest extends LinearOpMode {
         turretSubsystem turret = new turretSubsystem(robot);
         shooterSubsystem shooter = new shooterSubsystem(robot);
         ElapsedTime loopTimer = new ElapsedTime();
+        robot.intake.setPower(0);
+        robot.transfer.setPower(0);
 
         FlightRecorder rec = FlightRecorder.start("testteleop");
         java.util.Map<String, String> cfg = turretSubsystem.configSnapshot();
@@ -52,6 +58,8 @@ public class turretTest extends LinearOpMode {
         if (isStopRequested()) {
             turret.stop();
             shooter.stop();
+            robot.intake.setPower(0);
+            robot.transfer.setPower(0);
             rec.close();
             return;
         }
@@ -78,9 +86,9 @@ public class turretTest extends LinearOpMode {
                 // 2. Shooter / Outtake Controls (A to toggle, B to stop)
                 boolean aPressed = gamepad1.a;
                 if (gamepad1.b) {
-                    shooter.setEnabled(false);
+                    setShooterAndFeeders(robot, shooter, false);
                 } else if (aPressed && !lastShooterButton) {
-                    shooter.setEnabled(!shooter.isEnabled());
+                    setShooterAndFeeders(robot, shooter, !shooter.isEnabled());
                 }
                 lastShooterButton = aPressed;
 
@@ -182,7 +190,16 @@ public class turretTest extends LinearOpMode {
             robot.rb.setPower(0);
             turret.stop();
             shooter.stop();
+            robot.intake.setPower(0);
+            robot.transfer.setPower(0);
         }
+    }
+
+    private void setShooterAndFeeders(
+            Hardware robot, shooterSubsystem shooter, boolean enabled) {
+        shooter.setShooterEnabled(enabled);
+        robot.intake.setPower(enabled ? INTAKE_POWER : 0);
+        robot.transfer.setPower(enabled ? TRANSFER_POWER : 0);
     }
 
     private double applyDeadband(double value) {
