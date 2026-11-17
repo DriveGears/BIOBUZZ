@@ -29,6 +29,8 @@ import static com.pedropathing.ivy.commands.Commands.conditional;
 @Autonomous
 
 public class AUTO extends OpMode {
+    private static final double TRANSFER_POWER = 1.0;
+
     private Follower follower;
     private Hardware robot;
     private turretSubsystem turret;
@@ -73,7 +75,7 @@ public class AUTO extends OpMode {
                         () -> shooter.isAtSpeed() && turret.isAimReady(),
                         sequential(
                                 instant(() -> {
-                                    robot.transfer.setPower(shooterSubsystem.TRANSFER_POWER);
+                                    robot.transfer.setPower(TRANSFER_POWER);
                                 }),
                                 waitMs(1600),
                                 instant(this::stopFeed)

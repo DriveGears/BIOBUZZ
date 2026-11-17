@@ -1,231 +1,230 @@
 package org.firstinspires.ftc.teamcode.opmodes.testing;
 
+import com.acmerobotics.dashboard.FtcDashboard;
+import com.acmerobotics.dashboard.telemetry.MultipleTelemetry;
+import com.qualcomm.robotcore.eventloop.opmode.Disabled;
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
-import com.qualcomm.robotcore.hardware.DcMotor;
-import com.qualcomm.robotcore.hardware.DcMotorEx;
-import com.qualcomm.robotcore.hardware.DcMotorSimple;
 import com.qualcomm.robotcore.util.ElapsedTime;
 
-@TeleOp(name = "Outtake & Transfer Encoder Test", group = "Testing")
+import org.firstinspires.ftc.teamcode.hardware.Hardware;
+import org.firstinspires.ftc.teamcode.subsystems.shooterSubsystem;
+
+/** Temporary live tuner for the production shooter controller. */
+@Disabled
+@TeleOp(name = "TEMP Shooter PIDF Tuner", group = "Testing")
 public class outtakeTest extends LinearOpMode {
 
-    private static final double TICKS_PER_REV = 28.0;
+    private static final double INTAKE_POWER = 1.0;
+    private static final double TRANSFER_POWER = 1.0;
 
-    private double targetFlywheelRPM = 2175.0; // Default target RPM for outtake
-    private double targetTransferRPM = 1500.0; // Default target RPM for transfer
-    private boolean adjustingTransfer = false; // Toggle between outtake vs transfer with X button
+    private final ElapsedTime loopTimer = new ElapsedTime();
 
-    private static final double RPM_STEP_FINE = 50.0;    // D-Pad Up / Down (+/- 50 RPM)
-    private static final double RPM_STEP_COARSE = 250.0; // D-Pad Right / Left (+/- 250 RPM)
+    private Parameter selected = Parameter.TARGET_RPM;
+    private boolean coarseSteps;
+    private boolean intakeEnabled;
+    private boolean lastRightTrigger;
+    private boolean lastLeftTrigger;
+    private boolean lastX;
+    private boolean lastY;
+    private boolean lastDpadLeft;
+    private boolean lastDpadRight;
+    private boolean lastDpadUp;
+    private boolean lastDpadDown;
 
-    private static final double KP = 0.0020;
-    private static final double KI = 0.0005;
-    private static final double KD = 0.0001;
-    private static final double KF = 0.000435;
-
-    private double integralSum = 0.0;
-    private double lastError = 0.0;
-    private double transferIntegralSum = 0.0;
-    private double transferLastError = 0.0;
-    private static final double MAX_INTEGRAL_SUM = 200.0;
-
-    private boolean flywheelOn = false;
-    private boolean transferOn = false;
-
-    private boolean lastA = false;
-    private boolean lastY = false;
-    private boolean lastX = false;
-    private boolean lastDpadUp = false;
-    private boolean lastDpadDown = false;
-    private boolean lastDpadLeft = false;
-    private boolean lastDpadRight = false;
-
-    private final ElapsedTime pidTimer = new ElapsedTime();
+    private enum Parameter {
+        TARGET_RPM,
+        KF,
+        KP,
+        KI,
+        KD
+    }
 
     @Override
     public void runOpMode() {
-        DcMotorEx flywheel = hardwareMap.get(DcMotorEx.class, "outtake");
-        DcMotorEx transfer = hardwareMap.get(DcMotorEx.class, "transfer");
+        Hardware.resetInstance();
+        // This standalone shooter test does not map or communicate with Limelight.
+        Hardware robot = Hardware.getInstance(hardwareMap, false);
+        shooterSubsystem shooter = new shooterSubsystem(robot);
+        shooter.setTargetRpm(shooterSubsystem.COMPETITION_RPM);
+        robot.intake.setPower(0);
+        robot.transfer.setPower(0);
+        robot.enableManualBulkReads();
 
-        if (flywheel != null) {
-            flywheel.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
-            flywheel.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
-            flywheel.setDirection(DcMotorSimple.Direction.FORWARD);
-        }
-        if (transfer != null) {
-            transfer.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
-            transfer.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
-            transfer.setDirection(DcMotorSimple.Direction.REVERSE);
-        }
-
-        telemetry.addLine("Outtake & Transfer Encoder Test Ready");
+        FtcDashboard dashboard = FtcDashboard.getInstance();
+        dashboard.setTelemetryTransmissionInterval(25);
+        telemetry = new MultipleTelemetry(telemetry, dashboard.getTelemetry());
+        telemetry.setMsTransmissionInterval(50);
+        telemetry.addLine("TEMP SHOOTER TUNER READY");
+        telemetry.addLine("RT intake | RB reverse intake | LT flywheel | A transfer");
+        telemetry.addLine("D-pad L/R selects; U/D adjusts; X toggles fine/coarse");
+        telemetry.addLine("Y restores PIDF defaults; B stops everything");
         telemetry.update();
 
         waitForStart();
-        pidTimer.reset();
-
-        while (opModeIsActive()) {
-            double dt = pidTimer.seconds();
-            pidTimer.reset();
-            if (dt <= 0 || dt > 0.2) {
-                dt = 0.02;
-            }
-
-            // Mecanum drive
-            double forward = -applyDeadband(gamepad1.left_stick_y) * 0.75;
-            double strafe = applyDeadband(gamepad1.left_stick_x) * 1.10 * 0.75;
-            double turn = applyDeadband(gamepad1.right_stick_x) * 0.75;
-
-            boolean currentDpadUp = gamepad1.dpad_up;
-            boolean currentDpadDown = gamepad1.dpad_down;
-            boolean currentDpadLeft = gamepad1.dpad_left;
-            boolean currentDpadRight = gamepad1.dpad_right;
-
-            // X button: toggle tuning focus between Outtake and Transfer
-            boolean currentX = gamepad1.x;
-            if (currentX && !lastX) {
-                adjustingTransfer = !adjustingTransfer;
-            }
-            lastX = currentX;
-
-            // Small RPM adjustments: D-Pad Up / Down (+/- 50 RPM)
-            if (currentDpadUp && !lastDpadUp) {
-                if (adjustingTransfer) targetTransferRPM += RPM_STEP_FINE;
-                else targetFlywheelRPM += RPM_STEP_FINE;
-            }
-            if (currentDpadDown && !lastDpadDown) {
-                if (adjustingTransfer) targetTransferRPM = Math.max(0, targetTransferRPM - RPM_STEP_FINE);
-                else targetFlywheelRPM = Math.max(0, targetFlywheelRPM - RPM_STEP_FINE);
-            }
-
-            // Large RPM adjustments: D-Pad Right / Left (+/- 250 RPM)
-            if (currentDpadRight && !lastDpadRight) {
-                if (adjustingTransfer) targetTransferRPM += RPM_STEP_COARSE;
-                else targetFlywheelRPM += RPM_STEP_COARSE;
-            }
-            if (currentDpadLeft && !lastDpadLeft) {
-                if (adjustingTransfer) targetTransferRPM = Math.max(0, targetTransferRPM - RPM_STEP_COARSE);
-                else targetFlywheelRPM = Math.max(0, targetFlywheelRPM - RPM_STEP_COARSE);
-            }
-
-            lastDpadUp = currentDpadUp;
-            lastDpadDown = currentDpadDown;
-            lastDpadLeft = currentDpadLeft;
-            lastDpadRight = currentDpadRight;
-
-            // A button: toggle Outtake ON / OFF
-            boolean currentA = gamepad1.a;
-            if (currentA && !lastA) {
-                flywheelOn = !flywheelOn;
-                if (!flywheelOn) resetPID();
-            }
-            lastA = currentA;
-
-            // Y button: toggle Transfer ON / OFF
-            boolean currentY = gamepad1.y;
-            if (currentY && !lastY) {
-                transferOn = !transferOn;
-                if (!transferOn) resetTransferPID();
-            }
-            lastY = currentY;
-
-            if (gamepad1.b) {
-                flywheelOn = false;
-                transferOn = false;
-                resetPID();
-                resetTransferPID();
-            }
-
-            // Outtake PIDF
-            double targetTPS = flywheelOn ? (targetFlywheelRPM * TICKS_PER_REV / 60.0) : 0.0;
-            double actualTPS = (flywheel != null) ? flywheel.getVelocity() : 0.0;
-            double actualRPM = (actualTPS * 60.0) / TICKS_PER_REV;
-            double errorTPS = targetTPS - actualTPS;
-
-            double motorPower = 0.0;
-            if (flywheelOn) {
-                double pTerm = KP * errorTPS;
-                integralSum += errorTPS * dt;
-                integralSum = Math.max(-MAX_INTEGRAL_SUM, Math.min(MAX_INTEGRAL_SUM, integralSum));
-                double iTerm = KI * integralSum;
-                double derivative = (errorTPS - lastError) / dt;
-                double dTerm = KD * derivative;
-                double fTerm = KF * targetTPS;
-
-                motorPower = pTerm + iTerm + dTerm + fTerm;
-                motorPower = Math.max(-1.0, Math.min(1.0, motorPower));
-            } else {
-                resetPID();
-            }
-            lastError = errorTPS;
-
-            // Transfer PIDF
-            double targetTransferTPS = transferOn ? (targetTransferRPM * TICKS_PER_REV / 60.0) : 0.0;
-            double actualTransferTPS = (transfer != null) ? transfer.getVelocity() : 0.0;
-            double actualTransferRPM = (actualTransferTPS * 60.0) / TICKS_PER_REV;
-            double errorTransferTPS = targetTransferTPS - actualTransferTPS;
-
-            double transferMotorPower = 0.0;
-            if (transferOn) {
-                double pTermT = KP * errorTransferTPS;
-                transferIntegralSum += errorTransferTPS * dt;
-                transferIntegralSum = Math.max(-MAX_INTEGRAL_SUM, Math.min(MAX_INTEGRAL_SUM, transferIntegralSum));
-                double iTermT = KI * transferIntegralSum;
-                double derivativeT = (errorTransferTPS - transferLastError) / dt;
-                double dTermT = KD * derivativeT;
-                double fTermT = KF * targetTransferTPS;
-
-                transferMotorPower = pTermT + iTermT + dTermT + fTermT;
-                transferMotorPower = Math.max(-1.0, Math.min(1.0, transferMotorPower));
-            } else {
-                resetTransferPID();
-            }
-            transferLastError = errorTransferTPS;
-
-            if (flywheel != null) flywheel.setPower(motorPower);
-            if (transfer != null) transfer.setPower(transferMotorPower);
-
-            telemetry.addData("Tuning Focus (X)", adjustingTransfer ? "--> TRANSFER RPM" : "--> OUTTAKE RPM");
-            telemetry.addData("Outtake Toggle (A)", flywheelOn ? "ON (Running)" : "OFF");
-            telemetry.addData("Transfer Toggle (Y)", transferOn ? "ON (Running)" : "OFF");
-
-            telemetry.addLine();
-            telemetry.addData("Outtake Target RPM", "%.0f RPM", targetFlywheelRPM);
-            telemetry.addData("Outtake Actual RPM", "%.0f RPM", actualRPM);
-            telemetry.addData("Outtake Power", "%.1f%%", motorPower * 100.0);
-
-            telemetry.addLine();
-            telemetry.addData("Transfer Target RPM", "%.0f RPM", targetTransferRPM);
-            telemetry.addData("Transfer Actual RPM", "%.0f RPM", actualTransferRPM);
-            telemetry.addData("Transfer Power", "%.1f%%", transferMotorPower * 100.0);
-
-            telemetry.addLine();
-            telemetry.addLine("=== CONTROLS ===");
-            telemetry.addLine("A Button: Toggle Outtake ON / OFF");
-            telemetry.addLine("Y Button: Toggle Transfer ON / OFF");
-            telemetry.addLine("X Button: Switch Tuning Target (Outtake vs Transfer)");
-            telemetry.addLine("D-Pad Up/Down: +/- 50 RPM | Right/Left: +/- 250 RPM");
-            telemetry.addLine("B Button: Stop All");
-
-            telemetry.update();
+        if (isStopRequested()) {
+            shooter.stop();
+            return;
         }
 
-        if (flywheel != null) flywheel.setPower(0);
-        if (transfer != null) transfer.setPower(0);
+        loopTimer.reset();
+        lastRightTrigger = gamepad1.right_trigger > 0.5;
+        lastLeftTrigger = gamepad1.left_trigger > 0.5;
+
+        try {
+            while (opModeIsActive()) {
+                robot.beginLoop();
+                double dtSeconds = loopTimer.seconds();
+                loopTimer.reset();
+
+                updateControls(robot, shooter);
+
+                boolean feeding = gamepad1.a && !gamepad1.b;
+                robot.transfer.setPower(feeding ? TRANSFER_POWER : 0);
+                shooter.update(dtSeconds);
+
+                double actualRpm = shooter.getActualRpm();
+                addTelemetry(shooter, actualRpm, feeding);
+                telemetry.update();
+            }
+        } finally {
+            shooter.stop();
+            robot.intake.setPower(0);
+            robot.transfer.setPower(0);
+        }
     }
 
-    private void resetPID() {
-        integralSum = 0.0;
-        lastError = 0.0;
+    private void updateControls(Hardware robot, shooterSubsystem shooter) {
+        boolean rightTrigger = gamepad1.right_trigger > 0.5;
+        if (rightTrigger && !lastRightTrigger) {
+            intakeEnabled = !intakeEnabled;
+        }
+        lastRightTrigger = rightTrigger;
+
+        boolean leftTrigger = gamepad1.left_trigger > 0.5;
+        if (leftTrigger && !lastLeftTrigger) {
+            shooter.setShooterEnabled(!shooter.isEnabled());
+        }
+        lastLeftTrigger = leftTrigger;
+
+        if (gamepad1.b) {
+            intakeEnabled = false;
+            shooter.setShooterEnabled(false);
+        }
+
+        if (gamepad1.b) {
+            robot.intake.setPower(0);
+        } else if (gamepad1.right_bumper) {
+            robot.intake.setPower(-INTAKE_POWER);
+        } else {
+            robot.intake.setPower(intakeEnabled ? INTAKE_POWER : 0.0);
+        }
+
+        boolean x = gamepad1.x;
+        if (x && !lastX) {
+            coarseSteps = !coarseSteps;
+        }
+        lastX = x;
+
+        boolean y = gamepad1.y;
+        if (y && !lastY) {
+            shooter.resetPidfGains();
+        }
+        lastY = y;
+
+        boolean dpadLeft = gamepad1.dpad_left;
+        if (dpadLeft && !lastDpadLeft) {
+            selectPrevious();
+        }
+        lastDpadLeft = dpadLeft;
+
+        boolean dpadRight = gamepad1.dpad_right;
+        if (dpadRight && !lastDpadRight) {
+            selectNext();
+        }
+        lastDpadRight = dpadRight;
+
+        boolean dpadUp = gamepad1.dpad_up;
+        if (dpadUp && !lastDpadUp) {
+            adjustSelected(shooter, 1.0);
+        }
+        lastDpadUp = dpadUp;
+
+        boolean dpadDown = gamepad1.dpad_down;
+        if (dpadDown && !lastDpadDown) {
+            adjustSelected(shooter, -1.0);
+        }
+        lastDpadDown = dpadDown;
     }
 
-    private void resetTransferPID() {
-        transferIntegralSum = 0.0;
-        transferLastError = 0.0;
+    private void selectPrevious() {
+        Parameter[] values = Parameter.values();
+        selected = values[(selected.ordinal() + values.length - 1) % values.length];
     }
 
-    private double applyDeadband(double value) {
-        return Math.abs(value) < 0.05 ? 0 : value;
+    private void selectNext() {
+        Parameter[] values = Parameter.values();
+        selected = values[(selected.ordinal() + 1) % values.length];
+    }
+
+    private void adjustSelected(shooterSubsystem shooter, double direction) {
+        double multiplier = coarseSteps ? 10.0 : 1.0;
+        double kP = shooter.getKp();
+        double kI = shooter.getKi();
+        double kD = shooter.getKd();
+        double kF = shooter.getKf();
+
+        switch (selected) {
+            case TARGET_RPM:
+                shooter.setTargetRpm(shooter.getTargetRpm()
+                        + direction * 25.0 * multiplier);
+                return;
+            case KP:
+                kP += direction * 0.0001 * multiplier;
+                break;
+            case KI:
+                kI += direction * 0.00005 * multiplier;
+                break;
+            case KD:
+                kD += direction * 0.00001 * multiplier;
+                break;
+            case KF:
+                kF += direction * 0.00001 * multiplier;
+                break;
+        }
+
+        shooter.setPidfGains(kP, kI, kD, kF);
+    }
+
+    private void addTelemetry(
+            shooterSubsystem shooter, double actualRpm, boolean feeding) {
+        telemetry.addData("State", !shooter.isEnabled() ? "OFF"
+                : shooter.isAtSpeed() ? "READY (green)" : "SPINNING (red)");
+        telemetry.addData("Intake", gamepad1.right_bumper ? "REVERSE"
+                : intakeEnabled ? "ON" : "OFF");
+        telemetry.addData("Transfer", feeding ? "FEEDING" : "OFF");
+        telemetry.addData("Step size", coarseSteps ? "COARSE (10x)" : "FINE (1x)");
+        telemetry.addData("Selected", selected);
+        // Numeric fields remain numeric so FTC Dashboard can plot them directly.
+        telemetry.addData("targetRpm", shooter.getTargetRpm());
+        telemetry.addData("actualRpm", actualRpm);
+        telemetry.addData("errorRpm", shooter.getTargetRpm() - actualRpm);
+        telemetry.addData("motorPower", shooter.getAppliedPower());
+        telemetry.addData("KP", "%.6f%s", shooter.getKp(), marker(Parameter.KP));
+        telemetry.addData("KI", "%.6f%s", shooter.getKi(), marker(Parameter.KI));
+        telemetry.addData("KD", "%.6f%s", shooter.getKd(), marker(Parameter.KD));
+        telemetry.addData("KF", "%.6f%s", shooter.getKf(), marker(Parameter.KF));
+        telemetry.addData("Terms", "P=%+.3f I=%+.3f D=%+.3f F=%+.3f",
+                shooter.getPTerm(), shooter.getITerm(),
+                shooter.getDTerm(), shooter.getFTerm());
+        telemetry.addLine("Dashboard graph: select targetRpm + actualRpm");
+        telemetry.addLine("RT intake | RB reverse | LT flywheel | A transfer");
+        telemetry.addLine("B stop everything | Y reset gains");
+        telemetry.addLine("D-pad L/R select | U/D adjust | X fine/coarse");
+        telemetry.addLine("Values are temporary: copy the final PIDF values into shooterSubsystem.");
+    }
+
+    private String marker(Parameter parameter) {
+        return selected == parameter ? "  <" : "";
     }
 }

@@ -5,6 +5,8 @@ import com.qualcomm.hardware.limelightvision.Limelight3A;
 import com.qualcomm.hardware.lynx.LynxModule;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
 import com.qualcomm.robotcore.hardware.HardwareMap;
+import com.qualcomm.robotcore.hardware.PwmControl;
+import com.qualcomm.robotcore.hardware.ServoImplEx;
 import com.qualcomm.robotcore.hardware.VoltageSensor;
 
 import org.firstinspires.ftc.robotcore.external.navigation.AngleUnit;
@@ -27,6 +29,7 @@ public class Hardware {
     public final DcMotorEx intake;
     public final DcMotorEx transfer;
     public final DcMotorEx turret;
+    public final ServoImplEx shooterLed;
 
     /** Raw encoder count captured while the turret is centered during INIT. */
     private int turretEncoderZeroTicks;
@@ -42,6 +45,10 @@ public class Hardware {
     public Limelight3A limelight = null;
 
     public Hardware(HardwareMap hwMap) {
+        this(hwMap, true);
+    }
+
+    public Hardware(HardwareMap hwMap, boolean includeLimelight) {
         // Always restore live reads in case an earlier OpMode left the hubs in
         // MANUAL bulk-caching mode without clearing them each loop.
         hubs = hwMap.getAll(LynxModule.class);
@@ -55,10 +62,13 @@ public class Hardware {
         this.lb = hwMap.get(DcMotorEx.class, Specifications.BKLF_MOTOR);
         this.rb = hwMap.get(DcMotorEx.class, Specifications.BKRT_MOTOR);
         this.outtake = hwMap.get(DcMotorEx.class, Specifications.OUTTAKE);
+        this.shooterLed = hwMap.get(ServoImplEx.class, Specifications.SHOOTER_LED);
         this.intake = hwMap.get(DcMotorEx.class, Specifications.INTAKE);
         this.transfer = hwMap.get(DcMotorEx.class, Specifications.TRANSFER);
         this.turret = hwMap.get(DcMotorEx.class, Specifications.TURRET);
-        this.limelight = hwMap.get(Limelight3A.class,Specifications.LIMELIGHT);
+        this.limelight = includeLimelight
+                ? hwMap.get(Limelight3A.class, Specifications.LIMELIGHT)
+                : null;
         this.odo = hwMap.get(GoBildaPinpointDriver.class,Specifications.ODO);
 
         lf.setDirection(DcMotorEx.Direction.REVERSE);
@@ -74,10 +84,15 @@ public class Hardware {
         lb.setZeroPowerBehavior(DcMotorEx.ZeroPowerBehavior.BRAKE);
         rf.setZeroPowerBehavior(DcMotorEx.ZeroPowerBehavior.BRAKE);
         rb.setZeroPowerBehavior(DcMotorEx.ZeroPowerBehavior.BRAKE);
-        outtake.setZeroPowerBehavior(DcMotorEx.ZeroPowerBehavior.BRAKE);
+        // Let the flywheel coast when disabled; the shooter controller never commands reverse power.
+        outtake.setZeroPowerBehavior(DcMotorEx.ZeroPowerBehavior.FLOAT);
         intake.setZeroPowerBehavior(DcMotorEx.ZeroPowerBehavior.BRAKE);
         transfer.setZeroPowerBehavior(DcMotorEx.ZeroPowerBehavior.BRAKE);
         turret.setZeroPowerBehavior(DcMotorEx.ZeroPowerBehavior.BRAKE);
+
+        // goBILDA 3118-0808-0002 RGB Indicator Light uses the full servo PWM range.
+        shooterLed.setPwmRange(new PwmControl.PwmRange(500, 2500));
+        shooterLed.setPwmDisable();
 
         for (VoltageSensor sensor : hwMap.voltageSensor) {
             batterySensor = sensor;
@@ -278,6 +293,12 @@ public class Hardware {
 
     public static Hardware getInstance(HardwareMap hwMap) {
         instance = new Hardware(hwMap);
+        return instance;
+    }
+
+    /** Creates hardware without mapping Limelight for tests that do not use vision. */
+    public static Hardware getInstance(HardwareMap hwMap, boolean includeLimelight) {
+        instance = new Hardware(hwMap, includeLimelight);
         return instance;
     }
 
