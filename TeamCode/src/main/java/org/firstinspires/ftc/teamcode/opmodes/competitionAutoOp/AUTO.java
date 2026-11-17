@@ -1,4 +1,4 @@
-package org.firstinspires.ftc.teamcode.unused;
+package org.firstinspires.ftc.teamcode.opmodes.competitionAutoOp;
 
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 import com.qualcomm.robotcore.eventloop.opmode.Autonomous;
@@ -27,7 +27,7 @@ import static com.pedropathing.ivy.commands.Commands.instant;
 import static com.pedropathing.ivy.commands.Commands.conditional;
 
 @Autonomous
-@Disabled
+
 public class AUTO extends OpMode {
     private Follower follower;
     private Hardware robot;
