@@ -16,6 +16,7 @@ import com.pedropathing.ivy.Command;
 import com.pedropathing.ivy.Scheduler;
 
 import static com.pedropathing.api.Paths.line;
+import static com.pedropathing.api.Paths.curve;
 import static com.pedropathing.ivy.Scheduler.schedule;
 import static com.pedropathing.ivy.commands.Commands.waitMs;
 import static com.pedropathing.ivy.commands.Commands.waitUntil;
@@ -24,8 +25,8 @@ import static com.pedropathing.ivy.commands.Commands.conditional;
 import static com.pedropathing.ivy.groups.Groups.sequential;
 import static com.pedropathing.ivy.groups.Groups.race;
 import static com.pedropathing.ivy.pedro.PedroCommands.follow;
-@Disabled
-@Autonomous(name = "Red Auto", group = "Competition")
+
+@Autonomous(name = "RedAuto (Upward Cell)", group = "Competition")
 public class redAuto extends OpMode {
     private Follower follower;
     private Hardware robot;
@@ -36,24 +37,32 @@ public class redAuto extends OpMode {
     private final PoseFactory poseFactory = PoseFactory.degrees();
 
     //Poses
-    private final Pose startPose = poseFactory.of(32.0, 9.1, 90);
-    private final Pose flowerPose = poseFactory.of(14.7, 47.0, 179);
-    private final Pose flowerPose2 = poseFactory.of(47.2, 130.7, 90);
-    private final Pose parkPose = poseFactory.of(8.3, 108.2, -33);
+    private final Pose startPose = poseFactory.of(37.6, 9.2, 179.999); //backplate on top of outer hive bar
+    private final Pose gardenPose = poseFactory.of(14, 9.2, 179.999);
+    private final Pose gardenToWFlowerControl = poseFactory.of(36.31, 53.68, 179.999);
+    private final Pose WflowerPose = poseFactory.of(20, 52, 179.999);
+    private final Pose NflowerPose = poseFactory.of(40, 126, 90);
+    private final Pose WFlowerToNFlowerControl = poseFactory.of(28.2, 108.68, 90);
+    private final Pose parkPose = poseFactory.of(11, 121, 90);
 
-    private final Pose returnPose = poseFactory.of(32.0, 9.1, 90);
+//    private final Pose returnPose = poseFactory.of(, , );
 
     // Path methods
-    private Path startToScore() {
-        return line(startPose, flowerPose).linear(startPose, flowerPose);
+    private Path startToGarden() {
+        return line(startPose, gardenPose).linear(startPose, gardenPose);
     }
 
-    private Path flowerToScore(){
-        return line(flowerPose, flowerPose2).linear(flowerPose, flowerPose2);
+    private Path gardenToWFlower(){
+        return curve(gardenPose, gardenToWFlowerControl, WflowerPose).linear(gardenPose, WflowerPose);
     }
+
+    private Path WFlowerToNFlower(){
+        return curve(WflowerPose, WFlowerToNFlowerControl, NflowerPose).linear(WflowerPose, NflowerPose);
+    }
+
 
     private Path park(){
-        return line(flowerPose2, parkPose).linear(flowerPose2, parkPose);
+        return line(NflowerPose, parkPose).linear(NflowerPose, parkPose);
     }
 
     private Path returnPose(){
@@ -61,76 +70,80 @@ public class redAuto extends OpMode {
     }
 
     /** Collect for two seconds, then keep the intake on to retain the balls. */
-    private Command collectFromFlower() {
-        return sequential(
-                instant(() -> robot.intake.setPower(0.85)),
-                waitMs(2000)
-        );
-    }
+//    private Command collectFromFlower() {
+//        return sequential(
+//                instant(() -> robot.intake.setPower(0.85)),
+//                waitMs(2000)
+//        );
+//    }
 
-    private Command shootAtUpwardCell() {
-        return sequential(
-                instant(() -> {
-                    shotSkipped = false;
-                    shooter.setTargetRpm(shooterSubsystem.COMPETITION_RPM);
-                    shooter.setShooterEnabled(true);
-                    robot.intake.setPower(0.85); // Turn on intake along with outtake
-                    turret.setAutoAimEnabled(true);
-                }),
-                race(
-                        waitUntil(() -> shooter.isAtSpeed() && turret.isAimReady()),
-                        waitMs(2500)
-                ),
-                conditional(
-                        () -> shooter.isAtSpeed() && turret.isAimReady(),
-                        sequential(
-                                waitMs(150), // Brief delay (a few ms) so intake & outtake lead the transfer
-                                instant(() -> robot.transfer.setPower(1.0)),
-                                waitMs(3000),
-                                instant(() -> {
-                                    robot.transfer.setPower(0);
-                                    robot.intake.setPower(0);
-                                })
-                        ),
-                        instant(() -> shotSkipped = true)
-                ),
-                instant(() -> {
-                    robot.transfer.setPower(0);
-                    robot.intake.setPower(0);
-                    shooter.setShooterEnabled(false);
-                    turret.setAutoAimEnabled(false);
-                })
-        );
-    }
+//    private Command shootAtUpwardCell() {
+//        return sequential(
+//                instant(() -> {
+//                    shotSkipped = false;
+//                    shooter.setTargetRpm(shooterSubsystem.COMPETITION_RPM);
+//                    shooter.setShooterEnabled(true);
+//                    robot.intake.setPower(0.85); // Turn on intake along with outtake
+//                    turret.setAutoAimEnabled(true);
+//                }),
+//                race(
+//                        waitUntil(() -> shooter.isAtSpeed() && turret.isAimReady()),
+//                        waitMs(2500)
+//                ),
+//                conditional(
+//                        () -> shooter.isAtSpeed() && turret.isAimReady(),
+//                        sequential(
+//                                waitMs(150), // Brief delay (a few ms) so intake & outtake lead the transfer
+//                                instant(() -> robot.transfer.setPower(1.0)),
+//                                waitMs(3000),
+//                                instant(() -> {
+//                                    robot.transfer.setPower(0);
+//                                    robot.intake.setPower(0);
+//                                })
+//                        ),
+//                        instant(() -> shotSkipped = true)
+//                ),
+//                instant(() -> {
+//                    robot.transfer.setPower(0);
+//                    robot.intake.setPower(0);
+//                    shooter.setShooterEnabled(false);
+//                    turret.setAutoAimEnabled(false);
+//                })
+//        );
+//    }
 
     private Command autoRoutine() {
         return sequential(
                 // 1. Turn on outtake at the very beginning
-                instant(() -> {
-                    shooter.setTargetRpm(300);
-                    shooter.setShooterEnabled(true);
-                }),
-                // 2. Wait until outtake reaches 2100 RPM
-                waitUntil(() -> shooter.getActualRpm() >= 2100),
-                // 3. Turn on intake and transfer
-                instant(() -> {
-                    robot.intake.setPower(0.85);
-                    robot.transfer.setPower(1.0);
-                }),
-                waitMs(1500),
-                // 4. Turn OFF outtake and transfer while moving from startPose to flowerPose, keeping intake ON
-                instant(() -> {
-                    shooter.setShooterEnabled(false);
-                    robot.transfer.setPower(0);
-                    robot.intake.setPower(0.85);
-                }),
-                follow(follower, startToScore()),
-                collectFromFlower(),
-                follow(follower, flowerToScore()),
-                shootAtUpwardCell(),
-                follow(follower, park())
-//                waitMs(1000),
-//                follow(follower, returnPose()) //only so i dont have to get up
+//                instant(() -> {
+//                    shooter.setTargetRpm(300);
+//                    shooter.setShooterEnabled(true);
+//                }),
+//                // 2. Wait until outtake reaches 2100 RPM
+//                waitUntil(() -> shooter.getActualRpm() >= 2100),
+//                // 3. Turn on intake and transfer
+//                instant(() -> {
+//                    robot.intake.setPower(0.85);
+//                    robot.transfer.setPower(1.0);
+//                }),
+//                waitMs(1500),
+//                // 4. Turn OFF outtake and transfer while moving from startPose to flowerPose, keeping intake ON
+//                instant(() -> {
+//                    shooter.setShooterEnabled(false);
+//                    robot.transfer.setPower(0);
+//                    robot.intake.setPower(0.85);
+//                }),
+                follow(follower, startToGarden()),
+                waitMs(500),
+//                collectFromFlower(),
+                follow(follower, gardenToWFlower()),
+                waitMs(2000),
+//                shootAtUpwardCell(),
+                follow(follower, WFlowerToNFlower()),
+                waitMs(2000),
+                follow(follower, park()),
+                waitMs(1000),
+                follow(follower, returnPose()) //only so i dont have to get up
         );
     }
 
@@ -142,7 +155,7 @@ public class redAuto extends OpMode {
         follower = Constants.create(hardwareMap);
         turret = new turretSubsystem(robot);
         shooter = new shooterSubsystem(robot);
-        turret.setAlliance(turretSubsystem.Alliance.BLUE);
+        turret.setAlliance(turretSubsystem.Alliance.RED);
         shooter.setTargetRpm(shooterSubsystem.COMPETITION_RPM);
         follower.setPose(startPose);
         follower.update();
@@ -160,7 +173,6 @@ public class redAuto extends OpMode {
         follower.update();
         telemetry.addData("Status", "Ready - Keep robot still before Play");
         telemetry.addData("Alliance", turret.getAlliance());
-        telemetry.addLine("INIT selection: B = RED | X = BLUE");
         telemetry.addData("X", follower.pose().x());
         telemetry.addData("Y", follower.pose().y());
         telemetry.addData("Heading", Math.toDegrees(follower.pose().heading()));

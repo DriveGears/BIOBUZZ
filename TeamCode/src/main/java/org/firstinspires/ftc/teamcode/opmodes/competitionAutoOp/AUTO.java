@@ -26,7 +26,7 @@ import static com.pedropathing.ivy.commands.Commands.waitUntil;
 import static com.pedropathing.ivy.commands.Commands.instant;
 import static com.pedropathing.ivy.commands.Commands.conditional;
 
-@Autonomous
+@Disabled
 
 public class AUTO extends OpMode {
     private static final double TRANSFER_POWER = 1.0;

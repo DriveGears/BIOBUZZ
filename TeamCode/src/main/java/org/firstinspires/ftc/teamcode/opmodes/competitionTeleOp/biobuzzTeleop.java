@@ -3,10 +3,14 @@ package org.firstinspires.ftc.teamcode.opmodes.competitionTeleOp;
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 import com.qualcomm.robotcore.util.ElapsedTime;
 
+import org.firstinspires.ftc.robotcore.external.navigation.AngleUnit;
+import org.firstinspires.ftc.robotcore.external.navigation.DistanceUnit;
 import org.firstinspires.ftc.teamcode.hardware.Hardware;
 import org.firstinspires.ftc.teamcode.subsystems.FlightRecorder;
 import org.firstinspires.ftc.teamcode.subsystems.shooterSubsystem;
 import org.firstinspires.ftc.teamcode.subsystems.turretSubsystem;
+
+import java.util.Map;
 
 /** Shared implementation for the alliance-specific competition TeleOps. */
 public abstract class biobuzzTeleop extends LinearOpMode {
@@ -43,7 +47,7 @@ public abstract class biobuzzTeleop extends LinearOpMode {
         robot.transfer.setPower(0);
 
         rec = FlightRecorder.start("teleop");
-        java.util.Map<String, String> cfg = turretSubsystem.configSnapshot();
+        Map<String, String> cfg = turretSubsystem.configSnapshot();
         cfg.put("opmode", getClass().getSimpleName());
         cfg.put("tune_version", turretSubsystem.TUNE_VERSION);
         rec.writeConfig(cfg);
@@ -112,9 +116,14 @@ public abstract class biobuzzTeleop extends LinearOpMode {
 
             shooter.setShooterEnabled(outtakeToggle);
             shooter.update(dtSeconds);
+
             boolean transferFeeding = gamepad1.a;
+            boolean transferReverse = gamepad1.x;
+
             if (transferFeeding) {
                 robot.transfer.setPower(TRANSFER_POWER);
+            } else if (transferReverse) {
+                robot.transfer.setPower(-TRANSFER_POWER);
             } else {
                 robot.transfer.setPower(0);
             }
@@ -181,12 +190,12 @@ public abstract class biobuzzTeleop extends LinearOpMode {
                     shooter.getTargetRpm(), shooter.getActualRpm(),
                     !outtakeToggle ? "OFF"
                             : shooter.isAtSpeed() ? "READY" : "SPINNING UP");
-            telemetry.addData("Transfer", transferFeeding ? "FEEDING (A)" : "OFF");
+            telemetry.addData("Transfer", transferFeeding ? "FEEDING (A)" : transferReverse ? "REVERSING (X)" : "OFF");
             telemetry.addData("Odo pose", "x=%.1f y=%.1f hdg=%.1f",
-                    robot.odo.getPosX(org.firstinspires.ftc.robotcore.external.navigation.DistanceUnit.INCH),
-                    robot.odo.getPosY(org.firstinspires.ftc.robotcore.external.navigation.DistanceUnit.INCH),
+                    robot.odo.getPosX(DistanceUnit.INCH),
+                    robot.odo.getPosY(DistanceUnit.INCH),
                     Math.toDegrees(robot.odo.getHeading(
-                            org.firstinspires.ftc.robotcore.external.navigation.AngleUnit.RADIANS)));
+                            AngleUnit.RADIANS)));
             telemetry.addData("FUSION (D-pad up)", turretSubsystem.ODOMETRY_FUSION_ENABLED ? "ON" : "OFF (vision only)");
             telemetry.addData("Ready after stop (ms)", "%.0f", turret.getReadyAfterStopMs());
             telemetry.addData("Log", rec.getStatus());
@@ -217,7 +226,7 @@ public abstract class biobuzzTeleop extends LinearOpMode {
         telemetry.addData("Alliance", competitionAlliance());
         telemetry.addLine("Left Stick: Drive/strafe | Right Stick X: Turn");
         telemetry.addLine("RT (tap): Toggle intake | RB (hold): Reverse intake");
-        telemetry.addLine("LT (tap): Toggle flywheel | A (hold): Transfer");
+        telemetry.addLine("LT (tap): Toggle flywheel | A (hold): Transfer forward | X (hold): Reverse transfer");
         telemetry.addLine("LB (tap): Toggle auto/manual (starts AUTO)");
         telemetry.addLine("D-pad L/R: Move turret while in manual mode");
         telemetry.addLine("Auto-aim moves turret only; right stick owns chassis turn");
