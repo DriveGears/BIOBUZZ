@@ -1,7 +1,6 @@
 package org.firstinspires.ftc.teamcode.opmodes.competitionAutoOp;
 
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
-import com.qualcomm.robotcore.eventloop.opmode.Autonomous;
 import com.qualcomm.robotcore.eventloop.opmode.Disabled;
 import com.qualcomm.robotcore.util.ElapsedTime;
 import com.pedropathing.follower.Follower;
@@ -28,7 +27,7 @@ import static com.pedropathing.ivy.commands.Commands.conditional;
 
 @Disabled
 
-public class AUTO extends OpMode {
+public class OGAuto extends OpMode {
     private static final double TRANSFER_POWER = 1.0;
 
     private Follower follower;

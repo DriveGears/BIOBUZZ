@@ -37,23 +37,24 @@ public class redAuto extends OpMode {
     private final PoseFactory poseFactory = PoseFactory.degrees();
 
     //Poses
-    private final Pose startPose = poseFactory.of(37.6, 9.2, 179.999); //backplate on top of outer hive bar
-    private final Pose gardenPose = poseFactory.of(14, 9.2, 179.999);
-    private final Pose gardenToWFlowerControl = poseFactory.of(36.31, 53.68, 179.999);
-    private final Pose WflowerPose = poseFactory.of(20, 52, 179.999);
-    private final Pose NflowerPose = poseFactory.of(40, 126, 90);
-    private final Pose WFlowerToNFlowerControl = poseFactory.of(28.2, 108.68, 90);
-    private final Pose parkPose = poseFactory.of(11, 121, 90);
+    private final Pose startPose = poseFactory.of(36.6, 9.2, 179.999); //backplate on top of outer hive bar
+//    private final Pose gardenPose = poseFactory.of(14, 9.2, 179.999);
+//    private final Pose gardenToWFlowerControl = poseFactory.of(36.31, 53.68, 179.999);
+private final Pose startToWFlowerControl = poseFactory.of(40.35, 34.81, 179.999);
+    private final Pose WflowerPose = poseFactory.of(8, 52, 179.999);
+    private final Pose NflowerPose = poseFactory.of(38, 129, 90);
+    private final Pose WFlowerToNFlowerControl = poseFactory.of(49.4, 109.64, 90);
+    private final Pose parkPose = poseFactory.of(8, 121, 0);
 
 //    private final Pose returnPose = poseFactory.of(, , );
 
     // Path methods
-    private Path startToGarden() {
-        return line(startPose, gardenPose).linear(startPose, gardenPose);
-    }
+//    private Path startToGarden() {
+//        return line(startPose, gardenPose).linear(startPose, gardenPose);
+//    }
 
-    private Path gardenToWFlower(){
-        return curve(gardenPose, gardenToWFlowerControl, WflowerPose).linear(gardenPose, WflowerPose);
+    private Path startToWFlower(){
+        return curve(startPose, startToWFlowerControl, WflowerPose).linear(startPose, WflowerPose);
     }
 
     private Path WFlowerToNFlower(){
@@ -69,81 +70,67 @@ public class redAuto extends OpMode {
         return line(parkPose, startPose).linear(parkPose, startPose);
     }
 
-    /** Collect for two seconds, then keep the intake on to retain the balls. */
-//    private Command collectFromFlower() {
-//        return sequential(
-//                instant(() -> robot.intake.setPower(0.85)),
-//                waitMs(2000)
-//        );
-//    }
-
-//    private Command shootAtUpwardCell() {
-//        return sequential(
-//                instant(() -> {
-//                    shotSkipped = false;
-//                    shooter.setTargetRpm(shooterSubsystem.COMPETITION_RPM);
-//                    shooter.setShooterEnabled(true);
-//                    robot.intake.setPower(0.85); // Turn on intake along with outtake
-//                    turret.setAutoAimEnabled(true);
-//                }),
-//                race(
-//                        waitUntil(() -> shooter.isAtSpeed() && turret.isAimReady()),
-//                        waitMs(2500)
-//                ),
-//                conditional(
-//                        () -> shooter.isAtSpeed() && turret.isAimReady(),
-//                        sequential(
-//                                waitMs(150), // Brief delay (a few ms) so intake & outtake lead the transfer
-//                                instant(() -> robot.transfer.setPower(1.0)),
-//                                waitMs(3000),
-//                                instant(() -> {
-//                                    robot.transfer.setPower(0);
-//                                    robot.intake.setPower(0);
-//                                })
-//                        ),
-//                        instant(() -> shotSkipped = true)
-//                ),
-//                instant(() -> {
-//                    robot.transfer.setPower(0);
-//                    robot.intake.setPower(0);
-//                    shooter.setShooterEnabled(false);
-//                    turret.setAutoAimEnabled(false);
-//                })
-//        );
-//    }
 
     private Command autoRoutine() {
         return sequential(
-                // 1. Turn on outtake at the very beginning
-//                instant(() -> {
-//                    shooter.setTargetRpm(300);
-//                    shooter.setShooterEnabled(true);
-//                }),
-//                // 2. Wait until outtake reaches 2100 RPM
-//                waitUntil(() -> shooter.getActualRpm() >= 2100),
-//                // 3. Turn on intake and transfer
-//                instant(() -> {
-//                    robot.intake.setPower(0.85);
-//                    robot.transfer.setPower(1.0);
-//                }),
-//                waitMs(1500),
-//                // 4. Turn OFF outtake and transfer while moving from startPose to flowerPose, keeping intake ON
-//                instant(() -> {
-//                    shooter.setShooterEnabled(false);
-//                    robot.transfer.setPower(0);
-//                    robot.intake.setPower(0.85);
-//                }),
-                follow(follower, startToGarden()),
-                waitMs(500),
-//                collectFromFlower(),
-                follow(follower, gardenToWFlower()),
-                waitMs(2000),
-//                shootAtUpwardCell(),
+                // 1. At start pose: turn on intake & outtake, enable auto-aim, wait until shooter & turret ready (with 3s safety timeout), run transfer for 3.5s
+                instant(() -> {
+                    shooter.setTargetRpm(shooterSubsystem.COMPETITION_RPM);
+                    shooter.setShooterEnabled(true);
+                    robot.intake.setPower(0.85);
+                    turret.setAutoAimEnabled(true);
+                }),
+                race(
+                        waitUntil(() -> shooter.isAtSpeed() && turret.isAimReady()),
+                        waitMs(3000)
+                ),
+                instant(() -> robot.transfer.setPower(1.0)),
+                waitMs(3500),
+
+                // 2. Move to Wflower: turn off transfer, keep intake & outtake on, disable auto-aim during transit
+                instant(() -> {
+                    robot.transfer.setPower(0);
+                    turret.setAutoAimEnabled(false);
+                }),
+                follow(follower, startToWFlower()),
+
+                // 3. Stop at Wflower for 3.5 seconds
+                waitMs(3500),
+
+                // 4. Move to N flower: turn intake OFF, enable auto-aim
+                instant(() -> {
+                    robot.intake.setPower(0);
+                    turret.setAutoAimEnabled(true);
+                }),
                 follow(follower, WFlowerToNFlower()),
-                waitMs(2000),
-                follow(follower, park()),
-                waitMs(1000),
-                follow(follower, returnPose()) //only so i dont have to get up
+
+                // 5. At N flower position: wait until shooter & turret ready, pause briefly to settle, run transfer for 3.5s
+                race(
+                        waitUntil(() -> shooter.isAtSpeed() && turret.isAimReady()),
+                        waitMs(3000)
+                ),
+                waitMs(300), // settle time to ensure precise angle tracking
+                instant(() -> robot.transfer.setPower(1.0)),
+                waitMs(3500),
+
+                // 6. After 3.5s: turn intake ON, wait until shooter & turret ready, pause briefly to settle, run transfer for 3.5s
+                instant(() -> robot.intake.setPower(0.85)),
+                race(
+                        waitUntil(() -> shooter.isAtSpeed() && turret.isAimReady()),
+                        waitMs(3000)
+                ),
+                waitMs(300), // settle time to ensure precise angle tracking
+                instant(() -> robot.transfer.setPower(1.0)),
+                waitMs(3500),
+
+                // 7. Go to park
+                instant(() -> {
+                    robot.transfer.setPower(0);
+                    robot.intake.setPower(0);
+                    shooter.setShooterEnabled(false);
+                    turret.setAutoAimEnabled(false);
+                }),
+                follow(follower, park())
         );
     }
 
