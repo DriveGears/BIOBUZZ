@@ -1,6 +1,5 @@
 package org.firstinspires.ftc.teamcode.opmodes.competitionAutoOp;
 
-import com.qualcomm.robotcore.eventloop.opmode.Disabled;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 import com.qualcomm.robotcore.eventloop.opmode.Autonomous;
 import com.qualcomm.robotcore.util.ElapsedTime;
@@ -16,17 +15,15 @@ import com.pedropathing.ivy.Command;
 import com.pedropathing.ivy.Scheduler;
 
 import static com.pedropathing.api.Paths.line;
-import static com.pedropathing.api.Paths.curve;
 import static com.pedropathing.ivy.Scheduler.schedule;
 import static com.pedropathing.ivy.commands.Commands.waitMs;
 import static com.pedropathing.ivy.commands.Commands.waitUntil;
 import static com.pedropathing.ivy.commands.Commands.instant;
-import static com.pedropathing.ivy.commands.Commands.conditional;
 import static com.pedropathing.ivy.groups.Groups.sequential;
 import static com.pedropathing.ivy.groups.Groups.race;
 import static com.pedropathing.ivy.pedro.PedroCommands.follow;
 
-@Autonomous(name = "RedAuto (Upward Cell)", group = "Competition")
+@Autonomous(name = "Red Auto", group = "Competition")
 public class redAuto extends OpMode {
     private Follower follower;
     private Hardware robot;
@@ -36,101 +33,71 @@ public class redAuto extends OpMode {
     private boolean shotSkipped;
     private final PoseFactory poseFactory = PoseFactory.degrees();
 
-    //Poses
-    private final Pose startPose = poseFactory.of(36.6, 9.2, 179.999); //backplate on top of outer hive bar
-//    private final Pose gardenPose = poseFactory.of(14, 9.2, 179.999);
-//    private final Pose gardenToWFlowerControl = poseFactory.of(36.31, 53.68, 179.999);
-private final Pose startToWFlowerControl = poseFactory.of(40.35, 34.81, 179.999);
-    private final Pose WflowerPose = poseFactory.of(8, 52, 179.999);
-    private final Pose NflowerPose = poseFactory.of(38, 129, 90);
-    private final Pose WFlowerToNFlowerControl = poseFactory.of(49.4, 109.64, 90);
-    private final Pose parkPose = poseFactory.of(8, 121, 0);
+    //Poses (Only start, flowerLineup, and flower 1 with merged tuned poses)
+    private final Pose startPose = poseFactory.of(32.0, 9.1, 90);
+    private final Pose flowerLineupPose = poseFactory.of(75.87, 29.29, 77.20);
+    private final Pose flowerPose = poseFactory.of(78.31, 37.00, 94.90);
 
-//    private final Pose returnPose = poseFactory.of(, , );
-
-    // Path methods
-//    private Path startToGarden() {
-//        return line(startPose, gardenPose).linear(startPose, gardenPose);
-//    }
-
-    private Path startToWFlower(){
-        return curve(startPose, startToWFlowerControl, WflowerPose).linear(startPose, WflowerPose);
+    // Path methods (Start -> lineup -> flower 1)
+    private Path startToFlowerLineup() {
+        return line(startPose, flowerLineupPose).linear(startPose, flowerLineupPose);
     }
 
-    private Path WFlowerToNFlower(){
-        return curve(WflowerPose, WFlowerToNFlowerControl, NflowerPose).linear(WflowerPose, NflowerPose);
+    private Path flowerLineupToFlower() {
+        return line(flowerLineupPose, flowerPose).linear(flowerLineupPose, flowerPose);
     }
 
-
-    private Path park(){
-        return line(NflowerPose, parkPose).linear(NflowerPose, parkPose);
+    /** Collect for two seconds, then keep the intake on to retain the balls. */
+    private Command collectFromFlower() {
+        return sequential(
+                instant(() -> robot.intake.setPower(0.85)),
+                waitMs(2000)
+        );
     }
 
-    private Path returnPose(){
-        return line(parkPose, startPose).linear(parkPose, startPose);
+    /** Wait for shooter RPM and locked turret target, settle, then run transfer. */
+    private Command shootAtUpwardCell(long feedMs) {
+        return sequential(
+                instant(() -> {
+                    shotSkipped = false;
+                    shooter.setTargetRpm(shooterSubsystem.COMPETITION_RPM);
+                    shooter.setShooterEnabled(true);
+                    turret.setAutoAimEnabled(true);
+                }),
+                race(
+                        waitUntil(() -> shooter.isAtSpeed() && turret.isAimReady()),
+                        waitMs(3000) // 3s safety timeout so it never hangs
+                ),
+                waitMs(300), // settle time
+                instant(() -> robot.transfer.setPower(1.0)),
+                waitMs(feedMs),
+                instant(() -> {
+                    robot.transfer.setPower(0);
+                    turret.setAutoAimEnabled(false);
+                })
+        );
     }
-
 
     private Command autoRoutine() {
         return sequential(
-                // 1. At start pose: turn on intake & outtake, enable auto-aim, wait until shooter & turret ready (with 3s safety timeout), run transfer for 3.5s
+                // 1. Turn on intake & shooter at start
                 instant(() -> {
+                    robot.intake.setPower(0.85);
                     shooter.setTargetRpm(shooterSubsystem.COMPETITION_RPM);
                     shooter.setShooterEnabled(true);
-                    robot.intake.setPower(0.85);
                     turret.setAutoAimEnabled(true);
                 }),
-                race(
-                        waitUntil(() -> shooter.isAtSpeed() && turret.isAimReady()),
-                        waitMs(3000)
-                ),
-                instant(() -> robot.transfer.setPower(1.0)),
-                waitMs(3500),
-
-                // 2. Move to Wflower: turn off transfer, keep intake & outtake on, disable auto-aim during transit
-                instant(() -> {
-                    robot.transfer.setPower(0);
-                    turret.setAutoAimEnabled(false);
-                }),
-                follow(follower, startToWFlower()),
-
-                // 3. Stop at Wflower for 3.5 seconds
-                waitMs(3500),
-
-                // 4. Move to N flower: turn intake OFF, enable auto-aim
-                instant(() -> {
-                    robot.intake.setPower(0);
-                    turret.setAutoAimEnabled(true);
-                }),
-                follow(follower, WFlowerToNFlower()),
-
-                // 5. At N flower position: wait until shooter & turret ready, pause briefly to settle, run transfer for 3.5s
-                race(
-                        waitUntil(() -> shooter.isAtSpeed() && turret.isAimReady()),
-                        waitMs(3000)
-                ),
-                waitMs(300), // settle time to ensure precise angle tracking
-                instant(() -> robot.transfer.setPower(1.0)),
-                waitMs(3500),
-
-                // 6. After 3.5s: turn intake ON, wait until shooter & turret ready, pause briefly to settle, run transfer for 3.5s
-                instant(() -> robot.intake.setPower(0.85)),
-                race(
-                        waitUntil(() -> shooter.isAtSpeed() && turret.isAimReady()),
-                        waitMs(3000)
-                ),
-                waitMs(300), // settle time to ensure precise angle tracking
-                instant(() -> robot.transfer.setPower(1.0)),
-                waitMs(3500),
-
-                // 7. Go to park
-                instant(() -> {
-                    robot.transfer.setPower(0);
-                    robot.intake.setPower(0);
-                    shooter.setShooterEnabled(false);
-                    turret.setAutoAimEnabled(false);
-                }),
-                follow(follower, park())
+                // 2. Wait 3 seconds before moving to poses
+                waitMs(3000),
+                // 3. Move to lineup and flower 1
+                follow(follower, startToFlowerLineup()),
+                waitMs(400),
+                follow(follower, flowerLineupToFlower()),
+                // 4. Collect from flower
+                collectFromFlower(),
+                // 5. Wait for RPM and locked target, then shoot
+                shootAtUpwardCell(3500),
+                instant(() -> shooter.setShooterEnabled(false))
         );
     }
 
