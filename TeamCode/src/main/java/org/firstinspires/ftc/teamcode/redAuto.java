@@ -39,65 +39,18 @@ public class redAuto extends OpMode {
     private Pose target = null;
     private final PoseFactory poseFactory = PoseFactory.degrees();
 
-    //Poses
+    //Poses (Only start, flowerLineup, and flower 1)
     private final Pose startPose = poseFactory.of(32.0, 9.1, 90);
-    private final Pose gardenPose = poseFactory.of(32.9, 35.5, 90);
-    // Two-stage moves near the walls: the robot overshoots 4-7" when a long move ends at speed
-    // (reached y=40 vs a 32.4 garden target, and y=-3 vs the start at the back wall).
-    // Stopping ~10" short first and finishing with a short move keeps the overshoot to ~1".
-    private final Pose gardenApproachPose = poseFactory.of(32.9, 25.5, 90);
-    private final Pose startApproachPose = poseFactory.of(32.0, 19.5, 90);
-    private final Pose flowerPose = poseFactory.of(77.6, 36.9, 89);
-    // Line-up point before flowerPose2 so the front of the robot doesn't clip on approach.
-    // Final approach into the first flower is a straight FORWARD drive (+y) from 12" behind it.
-    // Approaching sideways along +x made the robot's right side hit the flower.
-    private final Pose flowerLineupPose = poseFactory.of(77.6, 24.9, 89);
-    // Shifted +3" in y (left, since the robot faces +x here): the log showed it reaching its target but sitting too far right of the second flower.
-    private final Pose flower2LineupPose = poseFactory.of(138.8, 9.8, 2);
-    private final Pose flowerPose2 = poseFactory.of(152.1, 10.9, 2);
-    private final Pose parkPose = poseFactory.of(143.3, 42.4, 271);
+    private final Pose flowerLineupPose = poseFactory.of(75.87, 30.29, 77.20);
+    private final Pose flowerPose = poseFactory.of(78.31, 36.25, 94.90);
 
-    private final Pose returnPose = poseFactory.of(32.0, 9.1, 90);
-
-    // Path methods
-    private Path gardenApproachToGarden() {
-        return line(gardenApproachPose, gardenPose).linear(gardenApproachPose, gardenPose);
-    }
-
-    private Path startToGardenApproach() {
-        return line(startPose, gardenApproachPose).linear(startPose, gardenApproachPose);
-    }
-
-    private Path gardenToStartApproach() {
-        return line(gardenPose, startApproachPose).linear(gardenPose, startApproachPose);
-    }
-
-    private Path startApproachToStart() {
-        return line(startApproachPose, startPose).linear(startApproachPose, startPose);
-    }
-
+    // Path methods (Only start -> lineup -> flower 1)
     private Path startToFlowerLineup() {
         return line(startPose, flowerLineupPose).linear(startPose, flowerLineupPose);
     }
 
     private Path flowerLineupToFlower() {
         return line(flowerLineupPose, flowerPose).linear(flowerLineupPose, flowerPose);
-    }
-
-    private Path flowerToLineup(){
-        return line(flowerPose, flower2LineupPose).linear(flowerPose, flower2LineupPose);
-    }
-
-    private Path lineupToFlower2(){
-        return line(flower2LineupPose, flowerPose2).linear(flower2LineupPose, flowerPose2);
-    }
-
-    private Path park(){
-        return line(flowerPose2, parkPose).linear(flowerPose2, parkPose);
-    }
-
-    private Path returnPose(){
-        return line(parkPose, startPose).linear(parkPose, startPose);
     }
 
     /** Collect for two seconds, then keep the intake on to retain the balls. */
@@ -108,13 +61,6 @@ public class redAuto extends OpMode {
         );
     }
 
-    /**
-     * Spin up, then feed the transfer for feedMs. Does NOT wait for shooter.isAtSpeed() or aim lock:
-     * the log showed RPM wobbling 2143-2229 against a 2100 target (outside the +/-32 RPM
-     * stability window), so isAtSpeed() never went true and the transfer never ran.
-     * Feeds once RPM is >= 90% of target, or after 2.5s regardless.
-     * The follower is left in HOLD so the robot stays put (follower.stop() let it coast ~9" back).
-     */
     private Command shootAtUpwardCell(long feedMs) {
         return sequential(
                 instant(() -> {
@@ -143,56 +89,21 @@ public class redAuto extends OpMode {
 
     private Command autoRoutine() {
         return sequential(
-                // The 30s auto ran out during the last shot, so the 3s start wait is gone and the
-                // flywheel spins up while driving (it needed ~2.2s from 0 at every outtake).
                 instant(() -> {
                     robot.intake.setPower(0.85);
                     shooter.setTargetRpm(shooterSubsystem.COMPETITION_RPM);
                     shooter.setShooterEnabled(true);
                 }),
-                mark("startToGardenApproach", gardenApproachPose),
-                follow(follower, startToGardenApproach()),
-                waitMs(250),
-                mark("startToGarden", gardenPose),
-                follow(follower, gardenApproachToGarden()),
-                mark("settleGarden", gardenPose),
-                waitMs(300),
-                mark("gardenToStartApproach", startApproachPose),
-                follow(follower, gardenToStartApproach()),
-                waitMs(250),
-                mark("gardenToStart", startPose),
-                follow(follower, startApproachToStart()),
-                mark("settleStart", startPose),
-                waitMs(300),
-                mark("outtakeAtStart", startPose),
-                shootAtUpwardCell(2500),
                 mark("startToFlowerLineup", flowerLineupPose),
                 follow(follower, startToFlowerLineup()),
                 mark("settleLineup1", flowerLineupPose),
-                waitMs(400), // let heading/position settle before the final approach
+                waitMs(400),
                 mark("lineupToFlower", flowerPose),
                 follow(follower, flowerLineupToFlower()),
                 mark("collect", flowerPose),
                 collectFromFlower(),
-                mark("flowerToLineup", flower2LineupPose),
-                follow(follower, flowerToLineup()),
-                mark("settleLineup2", flower2LineupPose),
-                waitMs(400), // heading was still ~10 deg off when arriving here
-                // Empty the first flower's balls BEFORE taking in the second flower's.
-                mark("outtakeAtLineup2", flower2LineupPose),
-                shootAtUpwardCell(3000),
-                mark("lineupToFlower2", flowerPose2),
-                follow(follower, lineupToFlower2()),
-                mark("collect2", flowerPose2),
-                collectFromFlower(), // the second flower had no collect step, so it never took its balls in
-                mark("shoot", flowerPose2),
-                shootAtUpwardCell(4500), // longest feed so every ball is out
                 instant(() -> shooter.setShooterEnabled(false)),
-                mark("park", parkPose),
-                follow(follower, park()),
-                mark("return", returnPose),
-                follow(follower, returnPose()), //only so i dont have to get up
-                mark("done", returnPose)
+                mark("done", flowerPose)
         );
     }
 

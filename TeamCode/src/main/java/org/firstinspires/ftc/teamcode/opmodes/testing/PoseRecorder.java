@@ -31,7 +31,7 @@ import java.util.Map;
 public class PoseRecorder extends OpMode {
     // Same labels / names used in redAuto. Add more here as needed.
     private static final String[] LABELS = {
-            "startPose", "gardenPose", "flowerPose", "flower2LineupPose", "flowerPose2", "parkPose", "returnPose"
+            "startPose", "flowerLineupPose", "flowerPose"
     };
     private static final Pose START = new Pose(32.0, 9.1, Math.toRadians(90));
 
@@ -50,6 +50,7 @@ public class PoseRecorder extends OpMode {
         follower.setPose(START);
         follower.update();
         poses = PoseStore.load();
+        PoseStore.beginSession();
         floatDrive();
         status = "Loaded " + poses.size() + " saved pose(s)";
     }
@@ -72,8 +73,11 @@ public class PoseRecorder extends OpMode {
 
         if (gamepad1.a && !pA) {
             Pose p = follower.pose();
-            poses.put(LABELS[sel], new PoseStore.P(p.x(), p.y(), Math.toDegrees(p.heading())));
+            PoseStore.P rec = new PoseStore.P(p.x(), p.y(), Math.toDegrees(p.heading()));
+            poses.put(LABELS[sel], rec);
             String err = PoseStore.save(poses);
+            String logErr = PoseStore.appendOne(LABELS[sel], rec);
+            if (err == null && logErr != null) err = "history: " + logErr;
             status = err == null ? "Saved " + LABELS[sel] : "SAVE FAILED: " + err;
             sel = (sel + 1) % LABELS.length;
         }

@@ -7,7 +7,10 @@ import java.io.File;
 import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -20,6 +23,37 @@ import java.util.Map;
 public class PoseStore {
     public static final File CSV = new File(AppUtil.FIRST_FOLDER, "biobuzz_poses.csv");
     public static final File JAVA = new File(AppUtil.FIRST_FOLDER, "biobuzz_poses.java.txt");
+    /** Append-only history: stamp,name,x,y,h -- one row per recorded pose, never overwritten. */
+    public static final File LOG = new File(AppUtil.FIRST_FOLDER, "biobuzz_pose_log.csv");
+
+    /** Timestamp shared by every save in one OpMode run; set by beginSession(). */
+    private static String session = null;
+
+    private static String stamp() {
+        return session != null ? session
+                : new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(new Date());
+    }
+
+    /** Call in init(): groups this run's appends under one timestamp. */
+    public static void beginSession() {
+        session = new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(new Date());
+    }
+
+    /** Append one recorded pose to the history log. @return null on success. */
+    public static String appendOne(String name, P p) {
+        try {
+            AppUtil.FIRST_FOLDER.mkdirs();
+            boolean fresh = !LOG.exists();
+            try (FileWriter w = new FileWriter(LOG, true)) {
+                if (fresh) w.write("stamp,name,x,y,h\n");
+                w.write(String.format(Locale.US, "%s,%s,%.2f,%.2f,%.1f\n",
+                        stamp(), name, p.x, p.y, p.headingDeg));
+            }
+            return null;
+        } catch (IOException ex) {
+            return ex.getMessage();
+        }
+    }
 
     public static class P {
         public final double x, y, headingDeg;
