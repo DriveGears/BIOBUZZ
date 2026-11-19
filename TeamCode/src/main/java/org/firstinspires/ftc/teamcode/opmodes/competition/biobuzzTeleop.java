@@ -24,6 +24,11 @@ public abstract class biobuzzTeleop extends LinearOpMode {
     private boolean lastLeftTrigger = false;
     private boolean lastLeftBumper = false;
     private boolean autoAimEnabled = true;
+    private boolean lastDpadUp = false;
+    private boolean lastDpadDown = false;
+    private boolean lastX = false;
+    private double targetRpm = shooterSubsystem.COMPETITION_RPM;
+    private static final double RPM_STEP = 50.0;
 
     protected abstract turretSubsystem.Alliance competitionAlliance();
 
@@ -67,6 +72,9 @@ public abstract class biobuzzTeleop extends LinearOpMode {
         lastRightTrigger = gamepad1.right_trigger > 0.5;
         lastLeftTrigger = gamepad1.left_trigger > 0.5;
         lastLeftBumper = gamepad1.left_bumper;
+        lastDpadUp = gamepad1.dpad_up;
+        lastDpadDown = gamepad1.dpad_down;
+        lastX = gamepad1.x;
 
         while (opModeIsActive()) {
             double dtSeconds = loopTimer.seconds();
@@ -88,17 +96,28 @@ public abstract class biobuzzTeleop extends LinearOpMode {
             }
             lastLeftTrigger = currentLeftTrigger;
 
-            boolean spit = gamepad1.right_bumper;
+            // Shooter RPM: D-pad UP/DOWN = +/-50 RPM, X = reset to the competition RPM.
+            if (gamepad1.dpad_up && !lastDpadUp) targetRpm += RPM_STEP;
+            if (gamepad1.dpad_down && !lastDpadDown) targetRpm -= RPM_STEP;
+            if (gamepad1.x && !lastX) targetRpm = shooterSubsystem.COMPETITION_RPM;
+            targetRpm = Math.max(0, Math.min(shooterSubsystem.MAX_RPM, targetRpm));
+            lastDpadUp = gamepad1.dpad_up;
+            lastDpadDown = gamepad1.dpad_down;
+            lastX = gamepad1.x;
+            shooter.setTargetRpm(targetRpm);
 
+            boolean spit = gamepad1.right_bumper;
+            boolean transferFeeding = gamepad1.a;
+
+            // Holding A runs the transfer AND the intake together (intake also stays on if toggled).
             if (spit) {
                 robot.intake.setPower(-0.7);
             } else {
-                robot.intake.setPower(intakeToggle ? 0.7 : 0.0);
+                robot.intake.setPower((intakeToggle || transferFeeding) ? 0.7 : 0.0);
             }
 
             shooter.setShooterEnabled(outtakeToggle);
             shooter.update(dtSeconds);
-            boolean transferFeeding = gamepad1.a;
             if (transferFeeding) {
                 robot.transfer.setPower(shooterSubsystem.TRANSFER_POWER);
             } else {
@@ -148,7 +167,7 @@ public abstract class biobuzzTeleop extends LinearOpMode {
                     shooter.getTargetRpm(), shooter.getActualRpm(),
                     !outtakeToggle ? "OFF"
                             : shooter.isAtSpeed() ? "READY" : "SPINNING UP");
-            telemetry.addData("Transfer", transferFeeding ? "FEEDING (A)" : "OFF");
+            telemetry.addData("Transfer", transferFeeding ? "FEEDING + INTAKE (A)" : "OFF");
             telemetry.addData("Robot X", robotPose.x());
             telemetry.addData("Robot Y", robotPose.y());
             telemetry.addData("Robot Heading", Math.toDegrees(robotPose.heading()));
@@ -169,7 +188,8 @@ public abstract class biobuzzTeleop extends LinearOpMode {
         telemetry.addData("Alliance", competitionAlliance());
         telemetry.addLine("Left Stick: Drive/strafe | Right Stick X: Turn");
         telemetry.addLine("RT (tap): Toggle intake | RB (hold): Reverse intake");
-        telemetry.addLine("LT (tap): Toggle flywheel | A (hold): Transfer");
+        telemetry.addLine("LT (tap): Toggle flywheel | A (hold): Transfer + intake together");
+        telemetry.addLine("D-pad UP/DOWN: Shooter RPM +/-50 | X: reset RPM");
         telemetry.addLine("LB (tap): Toggle auto/manual (starts AUTO)");
         telemetry.addLine("D-pad L/R: Move turret while in manual mode");
         telemetry.addLine("Auto-aim moves turret only; right stick owns chassis turn");

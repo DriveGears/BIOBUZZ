@@ -62,10 +62,14 @@ public class Constants {
                 c.headingFeedback.set(Controller.proportional(1.5));
 
                 c.headingBrakeCoefficients.set(Vector2D.cartesian(0.1, -0.01));
-                c.linearBrakeCoefficients.set(Matrix.diag(0.05, 0.02));
+                // Forward-axis overshoot fix: auto logs showed forward (robot-heading) moves overshooting
+                // 4-9" while sideways moves overshot ~1". Forward braking was 0.05 (was 0.139 in the older
+                // tuned config below). Previous value: Matrix.diag(0.05, 0.02)
+                c.linearBrakeCoefficients.set(Matrix.diag(0.14, 0.02));
                 c.quadraticBrakeCoefficients.set(Matrix.diag(0.0, 0.0));
 
-                c.maxAchievableForwardVelocity.set(75.00153749433845);
+                // previously 75.0015; lowered so forward moves plan a lower top speed and can stop in time
+                c.maxAchievableForwardVelocity.set(50.0);
                 c.maxAchievableStrafeVelocity.set(56.89789011688528);
                 c.naturalForwardDeceleration.set(39.85089153986496);
                 c.naturalStrafeDeceleration.set(75.34984129868222);
