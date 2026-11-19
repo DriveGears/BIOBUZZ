@@ -34,6 +34,7 @@ public class shooterSubsystem {
     private static final double MAX_INTEGRAL_SUM = 200.0;
 
     // Full-range servo positions for goBILDA RGB Indicator Light 3118-0808-0002.
+    private static final double LED_IDLE_POSITION = 1.000;  // 2500 us, solid white standby
     private static final double LED_RED_POSITION = 0.300;   // 1100 us
     private static final double LED_GREEN_POSITION = 0.500; // 1500 us
 
@@ -75,7 +76,7 @@ public class shooterSubsystem {
     private IndicatorState indicatorState;
 
     private enum IndicatorState {
-        OFF,
+        IDLE,
         SPINNING_UP,
         READY
     }
@@ -88,7 +89,7 @@ public class shooterSubsystem {
         this.robot = robot;
         robot.outtake.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
         stopFlywheel();
-        setIndicator(IndicatorState.OFF);
+        setIndicator(IndicatorState.IDLE);
     }
 
     public void setShooterEnabled(boolean enabled) {
@@ -100,7 +101,7 @@ public class shooterSubsystem {
             readyLoops = 0;
             atSpeed = false;
             stopFlywheel();
-            setIndicator(IndicatorState.OFF);
+            setIndicator(IndicatorState.IDLE);
         } else {
             setIndicator(IndicatorState.SPINNING_UP);
         }
@@ -141,7 +142,11 @@ public class shooterSubsystem {
 
     /** Call once per OpMode loop. */
     public void update(double dtSeconds) {
-        if (!enabled) return;
+        if (!enabled) {
+            // Reassert standby if another OpMode/device action disabled this servo channel.
+            setIndicator(IndicatorState.IDLE);
+            return;
+        }
 
         double dt = clamp(dtSeconds, 0.001, 0.100);
         double slewRate = targetRpm >= commandedRpm
@@ -248,13 +253,33 @@ public class shooterSubsystem {
         return appliedPower;
     }
 
+    /** Adds the complete controller state to a flight-recorder row for PIDF tuning. */
+    public void logTo(FlightRecorder recorder) {
+        double actualRpm = getActualRpm();
+        recorder.put("shoot_enabled", enabled);
+        recorder.put("shoot_target_rpm", targetRpm);
+        recorder.put("shoot_cmd_rpm", commandedRpm);
+        recorder.put("shoot_actual_rpm", actualRpm);
+        recorder.put("shoot_error_rpm", targetRpm - actualRpm);
+        recorder.put("shoot_at_speed", atSpeed);
+        recorder.put("shoot_power", appliedPower);
+        recorder.put("shoot_p", pTerm);
+        recorder.put("shoot_i", iTerm);
+        recorder.put("shoot_d", dTerm);
+        recorder.put("shoot_f", fTerm);
+        recorder.put("shoot_kp", kP);
+        recorder.put("shoot_ki", kI);
+        recorder.put("shoot_kd", kD);
+        recorder.put("shoot_kf", kF);
+    }
+
     public void stop() {
         enabled = false;
         commandedRpm = 0;
         readyLoops = 0;
         atSpeed = false;
         stopFlywheel();
-        setIndicator(IndicatorState.OFF);
+        setIndicator(IndicatorState.IDLE);
     }
 
     private void stopFlywheel() {
@@ -291,16 +316,24 @@ public class shooterSubsystem {
     }
 
     private void setIndicator(IndicatorState newState) {
-        if (indicatorState == newState) return;
+        if (indicatorState == newState && robot.shooterLed.isPwmEnabled()) return;
         indicatorState = newState;
 
-        if (newState == IndicatorState.OFF) {
-            robot.shooterLed.setPwmDisable();
-            return;
+        double position;
+        switch (newState) {
+            case READY:
+                position = LED_GREEN_POSITION;
+                break;
+            case SPINNING_UP:
+                position = LED_RED_POSITION;
+                break;
+            default:
+                position = LED_IDLE_POSITION;
+                break;
         }
-
+        // Cache the intended pulse first, then enable PWM so the light cannot
+        // briefly start at the controller's default/off pulse width.
+        robot.shooterLed.setPosition(position);
         robot.shooterLed.setPwmEnable();
-        robot.shooterLed.setPosition(newState == IndicatorState.READY
-                ? LED_GREEN_POSITION : LED_RED_POSITION);
     }
 }

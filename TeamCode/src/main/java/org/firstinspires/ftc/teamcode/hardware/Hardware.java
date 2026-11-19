@@ -92,7 +92,6 @@ public class Hardware {
 
         // goBILDA 3118-0808-0002 RGB Indicator Light uses the full servo PWM range.
         shooterLed.setPwmRange(new PwmControl.PwmRange(500, 2500));
-        shooterLed.setPwmDisable();
 
         for (VoltageSensor sensor : hwMap.voltageSensor) {
             batterySensor = sensor;

@@ -10,13 +10,13 @@ import org.firstinspires.ftc.teamcode.subsystems.FlightRecorder;
 import org.firstinspires.ftc.teamcode.subsystems.shooterSubsystem;
 import org.firstinspires.ftc.teamcode.subsystems.turretSubsystem;
 
-@Disabled
+//@Disabled
 @TeleOp(name = "biobuzz testing teleop", group = "Testing")
 public class turretTest extends LinearOpMode {
 
     private static final double DRIVE_SPEED = 0.80;
     private static final double STRAFE_MULTIPLIER = 1.10;
-    private static final double MANUAL_TURRET_POWER = 0.25;
+    private static final double MANUAL_TURRET_POWER = 0.40;
     private static final double INTAKE_POWER = 1.0;
     private static final double TRANSFER_POWER = 1.0;
 
@@ -129,11 +129,7 @@ public class turretTest extends LinearOpMode {
                 rec.put("in_turn", turn);
                 rec.put("in_autoaim", autoAim);
                 rec.put("in_dpad_manual", manualTurret);
-                rec.put("shoot_enabled", shooter.isEnabled());
-                rec.put("shoot_target_rpm", shooter.getTargetRpm());
-                rec.put("shoot_cmd_rpm", shooter.getCommandedRpm());
-                rec.put("shoot_actual_rpm", shooter.getActualRpm());
-                rec.put("shoot_at_speed", shooter.isAtSpeed());
+                shooter.logTo(rec);
                 rec.endRow();
 
                 telemetry.addData("FUSION (D-pad up)", turretSubsystem.ODOMETRY_FUSION_ENABLED ? "ON" : "OFF (vision only)");

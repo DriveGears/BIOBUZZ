@@ -17,6 +17,7 @@ public abstract class biobuzzTeleop extends LinearOpMode {
 
     private static final double INTAKE_POWER = 1.0;
     private static final double TRANSFER_POWER = 1.0;
+    private static final double MANUAL_TURRET_POWER = 0.40;
 
     private FlightRecorder rec;
     private boolean lastFusionToggle = false;
@@ -145,7 +146,7 @@ public abstract class biobuzzTeleop extends LinearOpMode {
 
             double manualTurretCommand = (gamepad1.dpad_right ? 1.0 : 0.0)
                     - (gamepad1.dpad_left ? 1.0 : 0.0);
-            turret.setManualPower(manualTurretCommand * 0.25);
+            turret.setManualPower(manualTurretCommand * MANUAL_TURRET_POWER);
             turret.update(dtSeconds);
 
             // Auto-aim moves only the turret. Chassis rotation is always the
@@ -169,9 +170,7 @@ public abstract class biobuzzTeleop extends LinearOpMode {
             rec.put("in_dpad_manual", manualTurretCommand);
             rec.put("in_intake_on", intakeToggle);
             rec.put("in_outtake_on", outtakeToggle);
-            rec.put("shoot_target_rpm", shooter.getTargetRpm());
-            rec.put("shoot_actual_rpm", shooter.getActualRpm());
-            rec.put("shoot_at_speed", shooter.isAtSpeed());
+            shooter.logTo(rec);
             rec.endRow();
 
             telemetry.addData("Turret Mode", autoAimEnabled ? "AUTO-AIM" : "MANUAL");

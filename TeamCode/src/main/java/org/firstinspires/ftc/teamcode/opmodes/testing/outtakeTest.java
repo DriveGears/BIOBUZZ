@@ -2,16 +2,15 @@ package org.firstinspires.ftc.teamcode.opmodes.testing;
 
 import com.acmerobotics.dashboard.FtcDashboard;
 import com.acmerobotics.dashboard.telemetry.MultipleTelemetry;
-import com.qualcomm.robotcore.eventloop.opmode.Disabled;
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.util.ElapsedTime;
 
 import org.firstinspires.ftc.teamcode.hardware.Hardware;
+import org.firstinspires.ftc.teamcode.subsystems.FlightRecorder;
 import org.firstinspires.ftc.teamcode.subsystems.shooterSubsystem;
 
 /** Temporary live tuner for the production shooter controller. */
-@Disabled
 @TeleOp(name = "TEMP Shooter PIDF Tuner", group = "Testing")
 public class outtakeTest extends LinearOpMode {
 
@@ -46,6 +45,7 @@ public class outtakeTest extends LinearOpMode {
         // This standalone shooter test does not map or communicate with Limelight.
         Hardware robot = Hardware.getInstance(hardwareMap, false);
         shooterSubsystem shooter = new shooterSubsystem(robot);
+        FlightRecorder recorder = FlightRecorder.start("shooter_pid");
         shooter.setTargetRpm(shooterSubsystem.COMPETITION_RPM);
         robot.intake.setPower(0);
         robot.transfer.setPower(0);
@@ -64,6 +64,7 @@ public class outtakeTest extends LinearOpMode {
         waitForStart();
         if (isStopRequested()) {
             shooter.stop();
+            recorder.close();
             return;
         }
 
@@ -82,6 +83,8 @@ public class outtakeTest extends LinearOpMode {
                 boolean feeding = gamepad1.a && !gamepad1.b;
                 robot.transfer.setPower(feeding ? TRANSFER_POWER : 0);
                 shooter.update(dtSeconds);
+                shooter.logTo(recorder);
+                recorder.endRow();
 
                 double actualRpm = shooter.getActualRpm();
                 addTelemetry(shooter, actualRpm, feeding);
@@ -91,6 +94,7 @@ public class outtakeTest extends LinearOpMode {
             shooter.stop();
             robot.intake.setPower(0);
             robot.transfer.setPower(0);
+            recorder.close();
         }
     }
 
