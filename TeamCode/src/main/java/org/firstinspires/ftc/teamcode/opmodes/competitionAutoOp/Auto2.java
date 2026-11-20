@@ -34,9 +34,14 @@ public class Auto2 extends OpMode {
     private final PoseFactory poseFactory = PoseFactory.degrees();
 
     //Poses
-    private final Pose startPose = poseFactory.of(32.0, 9.1, 90);
-    private final Pose flowerLineupPose = poseFactory.of(75.87, 29.29, 77.20);
-    private final Pose flowerPose = poseFactory.of(78.31, 37.00, 94.90);
+
+//    private final Pose startPose = poseFactory.of(34.53, 10.41, 105.83);
+    private final Pose startPose = poseFactory.of(32.0, 9.1, 180);
+    private final Pose flowerLineupPose = poseFactory.of(65.02, 39.53, 117.78);
+    private final Pose flowerPose = poseFactory.of(62.19, 42.26, 119.02);
+    private final Pose flower2LineupPose = poseFactory.of(33.38, 127.56, 79.15);
+    private final Pose flowerPose2 = poseFactory.of(34.46, 131.44, 79.85);
+    private final Pose parkPose = poseFactory.of(2.03, 120.74, 0.73);
 
     // Path methods
     private Path startToFlowerLineup() {
@@ -47,10 +52,44 @@ public class Auto2 extends OpMode {
         return line(flowerLineupPose, flowerPose).linear(flowerLineupPose, flowerPose);
     }
 
+    private Path flowerToLineup(){
+        return line(flowerPose, flower2LineupPose).linear(flowerPose, flower2LineupPose);
+    }
+
+    private Path lineupToFlower2(){
+        return line(flower2LineupPose, flowerPose2).linear(flower2LineupPose, flowerPose2);
+    }
+
+    private Path park(){
+        return line(flowerPose2, parkPose).linear(flowerPose2, parkPose);
+    }
+
     private Command collectFromFlower() {
         return sequential(
                 instant(() -> robot.intake.setPower(0.85)),
                 waitMs(2000)
+        );
+    }
+
+    private Command shootAtUpwardCell(long feedMs) {
+        return sequential(
+                instant(() -> {
+                    shotSkipped = false;
+                    shooter.setTargetRpm(shooterSubsystem.COMPETITION_RPM);
+                    shooter.setShooterEnabled(true);
+                    turret.setAutoAimEnabled(true);
+                }),
+                race(
+                        waitUntil(() -> shooter.isAtSpeed() && turret.isAimReady()),
+                        waitMs(3000)
+                ),
+                waitMs(300),
+                instant(() -> robot.transfer.setPower(1.0)),
+                waitMs(feedMs),
+                instant(() -> {
+                    robot.transfer.setPower(0);
+                    turret.setAutoAimEnabled(false);
+                })
         );
     }
 
@@ -89,22 +128,24 @@ public class Auto2 extends OpMode {
                 // 5. Collect from flower
                 collectFromFlower(),
 
-                // 6. Final shoot at flower pose
-                race(
-                        waitUntil(() -> shooter.isAtSpeed() && turret.isAimReady()),
-                        waitMs(3000)
-                ),
-                waitMs(300),
-                instant(() -> robot.transfer.setPower(1.0)),
-                waitMs(3500),
+                // 6. Flower 2 lineup & shoot
+                instant(() -> turret.setAutoAimEnabled(false)),
+                follow(follower, flowerToLineup()),
+                waitMs(400),
+                shootAtUpwardCell(3000),
 
-                // 7. Stop
+                // 7. Flower 2 collect & shoot
+                instant(() -> turret.setAutoAimEnabled(false)),
+                follow(follower, lineupToFlower2()),
+                collectFromFlower(),
+                shootAtUpwardCell(4500),
+
+                // 8. Park
                 instant(() -> {
-                    robot.transfer.setPower(0);
-                    robot.intake.setPower(0);
                     shooter.setShooterEnabled(false);
                     turret.setAutoAimEnabled(false);
-                })
+                }),
+                follow(follower, park())
         );
     }
 
