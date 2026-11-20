@@ -20,7 +20,6 @@ import static com.pedropathing.ivy.Scheduler.schedule;
 import static com.pedropathing.ivy.commands.Commands.waitMs;
 import static com.pedropathing.ivy.commands.Commands.waitUntil;
 import static com.pedropathing.ivy.commands.Commands.instant;
-import static com.pedropathing.ivy.commands.Commands.conditional;
 import static com.pedropathing.ivy.groups.Groups.sequential;
 import static com.pedropathing.ivy.groups.Groups.race;
 import static com.pedropathing.ivy.pedro.PedroCommands.follow;
@@ -39,18 +38,33 @@ public class redAuto extends OpMode {
     private Pose target = null;
     private final PoseFactory poseFactory = PoseFactory.degrees();
 
-    //Poses (Only start, flowerLineup, and flower 1)
+    //Poses
     private final Pose startPose = poseFactory.of(32.0, 9.1, 90);
     private final Pose flowerLineupPose = poseFactory.of(79.5, 34.886, 103.745);
     private final Pose flowerPose = poseFactory.of(78.92, 38.11, 103.06);
+    private final Pose flower2LineupPose = poseFactory.of(138.8, 9.8, 2);
+    private final Pose flowerPose2 = poseFactory.of(152.1, 10.9, 2);
+    private final Pose parkPose = poseFactory.of(143.3, 42.4, 271);
 
-    // Path methods (Only start -> lineup -> flower 1)
+    // Path methods
     private Path startToFlowerLineup() {
         return line(startPose, flowerLineupPose).linear(startPose, flowerLineupPose);
     }
 
     private Path flowerLineupToFlower() {
         return line(flowerLineupPose, flowerPose).linear(flowerLineupPose, flowerPose);
+    }
+
+    private Path flowerToLineup(){
+        return line(flowerPose, flower2LineupPose).linear(flowerPose, flower2LineupPose);
+    }
+
+    private Path lineupToFlower2(){
+        return line(flower2LineupPose, flowerPose2).linear(flower2LineupPose, flowerPose2);
+    }
+
+    private Path park(){
+        return line(flowerPose2, parkPose).linear(flowerPose2, parkPose);
     }
 
     /** Collect for two seconds, then keep the intake on to retain the balls. */
@@ -102,8 +116,22 @@ public class redAuto extends OpMode {
                 follow(follower, flowerLineupToFlower()),
                 mark("collect", flowerPose),
                 collectFromFlower(),
+                mark("flowerToLineup", flower2LineupPose),
+                follow(follower, flowerToLineup()),
+                mark("settleLineup2", flower2LineupPose),
+                waitMs(400),
+                mark("outtakeAtLineup2", flower2LineupPose),
+                shootAtUpwardCell(3000),
+                mark("lineupToFlower2", flowerPose2),
+                follow(follower, lineupToFlower2()),
+                mark("collect2", flowerPose2),
+                collectFromFlower(),
+                mark("shoot", flowerPose2),
+                shootAtUpwardCell(4500),
                 instant(() -> shooter.setShooterEnabled(false)),
-                mark("done", flowerPose)
+                mark("park", parkPose),
+                follow(follower, park()),
+                mark("done", parkPose)
         );
     }
 
