@@ -31,7 +31,7 @@ import java.util.Map;
 public class PoseRecorder extends OpMode {
     // Same labels / names used in redAuto. Add more here as needed.
     private static final String[] LABELS = {
-            "startPose", "flowerLineupPose", "flowerPose"
+            "flowerPose", "flower2LineupPose", "flowerPose2"
     };
     private static final Pose START = new Pose(32.0, 9.1, Math.toRadians(90));
 
