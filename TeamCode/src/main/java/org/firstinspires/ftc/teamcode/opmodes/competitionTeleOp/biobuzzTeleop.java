@@ -115,6 +115,11 @@ public abstract class biobuzzTeleop extends LinearOpMode {
                 robot.intake.setPower(intakeToggle ? INTAKE_POWER : 0.0);
             }
 
+            if (turret.hasDistance()) {
+                shooter.setTargetForDistance(turret.getImpactDistanceIn());
+            } else {
+                shooter.setTargetRpm(shooterSubsystem.COMPETITION_RPM);
+            }
             shooter.setShooterEnabled(outtakeToggle);
             shooter.update(dtSeconds);
 

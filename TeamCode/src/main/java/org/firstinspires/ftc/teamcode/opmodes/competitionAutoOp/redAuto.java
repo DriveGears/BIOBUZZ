@@ -146,6 +146,11 @@ public class redAuto extends OpMode {
 
         Scheduler.execute();
         follower.update();
+        if (turret.hasDistance()) {
+            shooter.setTargetForDistance(turret.getImpactDistanceIn());
+        } else {
+            shooter.setTargetRpm(shooterSubsystem.COMPETITION_RPM);
+        }
         shooter.update(dtSeconds);
         turret.update(dtSeconds);
 

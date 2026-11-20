@@ -43,6 +43,9 @@ public class turretSubsystem {
     /** Optional per-tag heights, in the same order. Empty uses DEFAULT_TAG_HEIGHT_IN. */
     public static final double[] TAG_HEIGHTS_IN = {};
 
+    /** Final optical aim trim. Negative moves the commanded aim left. */
+    public static final double GLOBAL_AIM_BIAS_DEG = -0.60;
+
     /** Encoder ticks per degree (System 1 calibrated value). */
     public static final double TICKS_PER_DEGREE = 1.81;
 
@@ -65,8 +68,8 @@ public class turretSubsystem {
     public static final double CAMERA_DOWN_ANGLE_DEG = 24.24;
 
     /**
-     * Official SDK 12 BIOBUZZ cluster geometry for IDs 42-45. Tag X positions
-     * are relative to the CELL opening center, which is the official aim origin.
+     * BIOBUZZ cluster X positions relative to the CELL opening, with the measured
+     * sideways Limelight-to-turret compensation baked in. The asymmetry is intentional.
      */
     public static final double[] CLUSTER_TAG_X_OFFSETS_IN = {
             -8.50, -4.75, 0.75, 4.50
@@ -85,9 +88,11 @@ public class turretSubsystem {
     public static final double VELOCITY_KV = 0.00150;
     public static final double POSITION_KI = 0.020;
     public static final double MAX_INTEGRAL_POWER = 0.08;
+    /** Only integrate close enough that static friction, not travel error, is dominant. */
+    public static final double INTEGRAL_ZONE_TICKS = 6.0;
     public static final double STICTION_POWER = 0.14;   // v3 log: only 0.2% stall loops, so 0.22 was over-kicking
     public static final double STICTION_FADE_TICKS = 2.5;
-    public static final double SETPOINT_DEADBAND_TICKS = 1.0;
+    public static final double SETPOINT_DEADBAND_TICKS = 1.5;
     public static final double FULL_POWER_ERROR_TICKS = 8.0;
     public static final double MIN_PROXIMITY_POWER_SCALE = 0.65;
     public static final double MOTOR_VELOCITY_FILTER_ALPHA = 0.50;
@@ -104,7 +109,7 @@ public class turretSubsystem {
      * still, so +-1 tick of measurement/latency noise cannot keep re-kicking
      * the motor (v3 log: ~7% power sign flips and ~350 ms of hunting after arrival).
      */
-    public static final double VISION_DEADBAND_TICKS = 1.0;
+    public static final double VISION_DEADBAND_TICKS = 1.5;
     public static final double VISION_DEADBAND_MAX_VELOCITY_TPS = 40.0;
 
     /** Ready = vision error small for N frames AND turret physically settled. */
@@ -149,7 +154,7 @@ public class turretSubsystem {
     public static final double FUSION_STILL_GAIN_MIN = 0.08;
     public static final double FUSION_STILL_GAIN_PER_DEG = 0.12;
     /** When the robot is still, hold the setpoint unless the fused target moved more than this. */
-    public static final double FUSION_STILL_DEADBAND_TICKS = 1.2;
+    public static final double FUSION_STILL_DEADBAND_TICKS = 1.8;
     /** A frame that disagrees with the fused estimate by more than this re-seeds it. */
     public static final double FUSION_REJECT_DEG = 8.0;
     public static final double FUSION_REJECT_IN = 14.0;
@@ -292,6 +297,8 @@ public class turretSubsystem {
     private double targetVelocityTicksPerSecond;
     private boolean targetTicksInitialized;
     private double integralPower;
+    private double previousPositionError;
+    private boolean previousPositionErrorValid;
     private double appliedPower;
     private double filteredMotorVelocityTicksPerSecond;
     private boolean motorVelocityInitialized;
@@ -379,6 +386,7 @@ public class turretSubsystem {
                 + " visible=" + targetVisible + " robotStopped=" + robotStopped);
         targetTicksInitialized = false;
         integralPower = 0;
+        previousPositionErrorValid = false;
         stableAimFrames = 0;
         aimReady = false;
         resetMeasurementHistory();
@@ -423,6 +431,7 @@ public class turretSubsystem {
         targetVelocityTicksPerSecond = 0;
         targetTicksInitialized = false;
         integralPower = 0;
+        previousPositionErrorValid = false;
         appliedPower = 0;
         manualPower = 0;
         encoderHistory.clear();
@@ -510,7 +519,7 @@ public class turretSubsystem {
     private void updateReadyState(double nowMs, int currentTicks) {
         boolean visionOk = targetVisible && stableAimFrames >= AIM_STABLE_FRAMES;
         boolean settled = !autoAimEnabled
-                || (Math.abs(targetTicks - currentTicks) <= READY_POSITION_TOL_TICKS
+                || (Math.abs(controlTargetTicks - currentTicks) <= READY_POSITION_TOL_TICKS
                     && Math.abs(filteredMotorVelocityTicksPerSecond) <= READY_MAX_VELOCITY_TPS);
         boolean wasReady = aimReady;
         aimReady = visionOk && settled;
@@ -1304,17 +1313,30 @@ public class turretSubsystem {
         double velocityError = targetVelocityTicksPerSecond
                 - filteredMotorVelocityTicksPerSecond;
 
+        // Do not carry stored torque through the setpoint; that creates a
+        // left-right limit cycle even when the vision target is steady.
+        if (previousPositionErrorValid
+                && positionError * previousPositionError < 0) {
+            integralPower = 0;
+        }
+        previousPositionError = positionError;
+        previousPositionErrorValid = true;
+
         dbgP = dbgD = dbgKV = dbgStiction = dbgRawPower = 0;
         dbgScale = 1;
         dbgSaturated = false;
         if (Math.abs(positionError) < SETPOINT_DEADBAND_TICKS
                 && Math.abs(targetVelocityTicksPerSecond) < 2.0) {
             appliedPower = 0;
-            integralPower *= 0.90;
+            integralPower = 0;
         } else {
-            integralPower = clamp(
-                    integralPower + POSITION_KI * positionError * dt,
-                    -MAX_INTEGRAL_POWER, MAX_INTEGRAL_POWER);
+            if (Math.abs(positionError) <= INTEGRAL_ZONE_TICKS) {
+                integralPower = clamp(
+                        integralPower + POSITION_KI * positionError * dt,
+                        -MAX_INTEGRAL_POWER, MAX_INTEGRAL_POWER);
+            } else {
+                integralPower = 0;
+            }
             double stiction = Math.copySign(
                     STICTION_POWER * clamp(
                             Math.abs(positionError) / STICTION_FADE_TICKS, 0, 1),
@@ -1360,6 +1382,7 @@ public class turretSubsystem {
     private void applyManualControl(int currentTicks) {
         targetTicksInitialized = false;
         integralPower = 0;
+        previousPositionErrorValid = false;
         dbgP = dbgD = dbgKV = dbgStiction = dbgRawPower = dbgI = 0;
         dbgScale = 1;
         appliedPower = limitAtSoftStops(manualPower, currentTicks);
@@ -1648,7 +1671,8 @@ public class turretSubsystem {
             centerTxDeg = Math.toDegrees(Math.atan(meanTanTx));
         }
         return new ClusterAim(
-                centerTxDeg, averageTyDeg, horizontalDistanceIn);
+                centerTxDeg + GLOBAL_AIM_BIAS_DEG,
+                averageTyDeg, horizontalDistanceIn);
     }
 
     private double estimateOpticalDepthIn(LLResultTypes.FiducialResult tag) {
@@ -1853,6 +1877,8 @@ public class turretSubsystem {
     public void stop() {
         turretMotor.setPower(0);
         lastWrittenPower = 0;
+        integralPower = 0;
+        previousPositionErrorValid = false;
         robot.limelight.stop();
     }
 

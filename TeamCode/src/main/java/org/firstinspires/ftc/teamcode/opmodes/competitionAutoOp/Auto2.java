@@ -1,4 +1,4 @@
-package org.firstinspires.ftc.teamcode;
+package org.firstinspires.ftc.teamcode.opmodes.competitionAutoOp;
 
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 import com.qualcomm.robotcore.eventloop.opmode.Autonomous;
@@ -153,6 +153,11 @@ public class Auto2 extends OpMode {
 
         Scheduler.execute();
         follower.update();
+        if (turret.hasDistance()) {
+            shooter.setTargetForDistance(turret.getImpactDistanceIn());
+        } else {
+            shooter.setTargetRpm(shooterSubsystem.COMPETITION_RPM);
+        }
         shooter.update(dtSeconds);
         turret.update(dtSeconds);
 

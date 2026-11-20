@@ -10,7 +10,7 @@ import org.firstinspires.ftc.teamcode.subsystems.FlightRecorder;
 import org.firstinspires.ftc.teamcode.subsystems.shooterSubsystem;
 import org.firstinspires.ftc.teamcode.subsystems.turretSubsystem;
 
-//@Disabled
+@Disabled
 @TeleOp(name = "biobuzz testing teleop", group = "Testing")
 public class turretTest extends LinearOpMode {
 

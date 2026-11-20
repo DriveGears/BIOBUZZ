@@ -15,15 +15,19 @@ public class shooterSubsystem {
     /** Motor revolutions per OUTTAKE revolution. Use 1.0 for a direct drive. */
     public static final double MOTOR_REVS_PER_OUTTAKE_REV = 1.0;
 
-    /** Competition shooter speed. Distance-based RPM selection is intentionally disabled. */
-    public static final double COMPETITION_RPM = 2900.0;
+    /** Close/mid-field baseline. Long shots add RPM through the table below. */
+    public static final double COMPETITION_RPM = 2800.0;
 
-    /** Distances and RPMs are paired. Measure new values for this year's mechanism. */
+    /**
+     * Conservative first-pass distance calibration. Close shots use the baseline;
+     * long shots progressively add RPM. Replace these with measured make/miss data.
+     */
     public static final double[] SHOT_DISTANCE_IN = {
-            38, 40, 42, 58, 60, 82, 90, 92, 98, 120, 132
+            38, 60, 82, 90, 98, 120, 132
     };
     public static final double[] SHOT_RPM = {
-            1500, 1500, 1565, 1810, 1855, 2070, 2170, 2185, 2280, 2615, 2680
+            COMPETITION_RPM, COMPETITION_RPM, 2900, 3000,
+            3075, 3250, 3350
     };
 
     // Competition PIDF defaults (RUN_WITHOUT_ENCODER motor mode).
@@ -37,6 +41,14 @@ public class shooterSubsystem {
     private static final double LED_IDLE_POSITION = 1.000;  // 2500 us, solid white standby
     private static final double LED_RED_POSITION = 0.300;   // 1100 us
     private static final double LED_GREEN_POSITION = 0.500; // 1500 us
+    /**
+     * While spinning, use the indicator's red-to-green hue range to show RPM error.
+     * Errors at or above this value are red; smaller errors progressively approach green.
+     */
+    public static final double LED_FULL_SCALE_ERROR_RPM = 1000.0;
+    /** Reserve the final green endpoint for the stable READY state. */
+    private static final double LED_SPIN_UP_MAX_CLOSENESS = 0.90;
+    private static final double LED_MIN_POSITION_CHANGE = 0.004;
 
     /** Maximum allowed request and how quickly the commanded RPM may change. */
     public static final double MAX_RPM = 3400.0;
@@ -74,6 +86,7 @@ public class shooterSubsystem {
     private double fTerm;
     private double appliedPower;
     private IndicatorState indicatorState;
+    private double indicatorPosition = Double.NaN;
 
     private enum IndicatorState {
         IDLE,
@@ -113,8 +126,18 @@ public class shooterSubsystem {
 
     /** Uses the calibration table to select an RPM for a measured/predicted distance. */
     public void setTargetForDistance(double distanceIn) {
-        distanceBucketIn = distanceIn;
-        setTargetRpm(COMPETITION_RPM);
+        if (!Double.isFinite(distanceIn) || distanceIn <= 0) {
+            distanceBucketIn = Double.NaN;
+            setTargetRpm(COMPETITION_RPM);
+            return;
+        }
+
+        if (!Double.isFinite(distanceBucketIn)
+                || Math.abs(distanceIn - distanceBucketIn) > DISTANCE_HYSTERESIS_IN) {
+            distanceBucketIn = Math.round(distanceIn / DISTANCE_BUCKET_IN)
+                    * DISTANCE_BUCKET_IN;
+        }
+        setTargetRpm(rpmForDistance(distanceBucketIn));
     }
 
     /** Useful for test tuning without the camera. */
@@ -181,7 +204,11 @@ public class shooterSubsystem {
             readyLoops = 0;
         }
         atSpeed = readyLoops >= READY_STABLE_LOOPS;
-        setIndicator(atSpeed ? IndicatorState.READY : IndicatorState.SPINNING_UP);
+        if (atSpeed) {
+            setIndicator(IndicatorState.READY);
+        } else {
+            setSpinUpIndicator(actualRpm);
+        }
     }
 
     public boolean isAtSpeed() {
@@ -258,6 +285,7 @@ public class shooterSubsystem {
         double actualRpm = getActualRpm();
         recorder.put("shoot_enabled", enabled);
         recorder.put("shoot_target_rpm", targetRpm);
+        recorder.put("shoot_distance_bucket_in", distanceBucketIn);
         recorder.put("shoot_cmd_rpm", commandedRpm);
         recorder.put("shoot_actual_rpm", actualRpm);
         recorder.put("shoot_error_rpm", targetRpm - actualRpm);
@@ -271,6 +299,7 @@ public class shooterSubsystem {
         recorder.put("shoot_ki", kI);
         recorder.put("shoot_kd", kD);
         recorder.put("shoot_kf", kF);
+        recorder.put("shoot_led_position", indicatorPosition);
     }
 
     public void stop() {
@@ -316,7 +345,6 @@ public class shooterSubsystem {
     }
 
     private void setIndicator(IndicatorState newState) {
-        if (indicatorState == newState && robot.shooterLed.isPwmEnabled()) return;
         indicatorState = newState;
 
         double position;
@@ -331,6 +359,28 @@ public class shooterSubsystem {
                 position = LED_IDLE_POSITION;
                 break;
         }
+        writeIndicatorPosition(position);
+    }
+
+    /** Shows spin-up progress across a wide RPM range instead of only red/green. */
+    private void setSpinUpIndicator(double actualRpm) {
+        indicatorState = IndicatorState.SPINNING_UP;
+        double absoluteErrorRpm = Math.abs(targetRpm - actualRpm);
+        double closeness = 1.0 - clamp(
+                absoluteErrorRpm / LED_FULL_SCALE_ERROR_RPM, 0.0, 1.0);
+        closeness = Math.min(closeness, LED_SPIN_UP_MAX_CLOSENESS);
+        double position = LED_RED_POSITION
+                + closeness * (LED_GREEN_POSITION - LED_RED_POSITION);
+        writeIndicatorPosition(position);
+    }
+
+    private void writeIndicatorPosition(double position) {
+        if (robot.shooterLed.isPwmEnabled()
+                && Double.isFinite(indicatorPosition)
+                && Math.abs(position - indicatorPosition) < LED_MIN_POSITION_CHANGE) {
+            return;
+        }
+        indicatorPosition = position;
         // Cache the intended pulse first, then enable PWM so the light cannot
         // briefly start at the controller's default/off pulse width.
         robot.shooterLed.setPosition(position);
