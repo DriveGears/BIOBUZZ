@@ -290,6 +290,11 @@ public class Hardware {
         return turret.getCurrent(CurrentUnit.AMPS);
     }
 
+    /** Separate hub command: sample periodically rather than every control loop. */
+    public double readOuttakeCurrentAmps() {
+        return outtake.getCurrent(CurrentUnit.AMPS);
+    }
+
     public static Hardware getInstance(HardwareMap hwMap) {
         instance = new Hardware(hwMap);
         return instance;

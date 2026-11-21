@@ -154,7 +154,7 @@ public class Auto2 extends OpMode {
         Scheduler.execute();
         follower.update();
         if (turret.hasDistance()) {
-            shooter.setTargetForDistance(turret.getImpactDistanceIn());
+            shooter.setTargetForDistance(turret.getShooterDistanceIn());
         } else {
             shooter.setTargetRpm(shooterSubsystem.COMPETITION_RPM);
         }

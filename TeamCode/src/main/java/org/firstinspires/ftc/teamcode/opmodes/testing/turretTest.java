@@ -10,8 +10,7 @@ import org.firstinspires.ftc.teamcode.subsystems.FlightRecorder;
 import org.firstinspires.ftc.teamcode.subsystems.shooterSubsystem;
 import org.firstinspires.ftc.teamcode.subsystems.turretSubsystem;
 
-@Disabled
-@TeleOp(name = "biobuzz testing teleop", group = "Testing")
+@TeleOp(name = "biobuzz turret testing teleop", group = "Testing")
 public class turretTest extends LinearOpMode {
 
     private static final double DRIVE_SPEED = 0.80;
@@ -94,7 +93,7 @@ public class turretTest extends LinearOpMode {
 
                 // Set target RPM for distance if turret has distance, otherwise default
                 if (turret.hasDistance()) {
-                    shooter.setTargetForDistance(turret.getImpactDistanceIn());
+                    shooter.setTargetForDistance(turret.getShooterDistanceIn());
                 } else {
                     shooter.setTargetRpm(shooterSubsystem.COMPETITION_RPM);
                 }

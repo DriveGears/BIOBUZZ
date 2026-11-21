@@ -15,27 +15,31 @@ public class shooterSubsystem {
     /** Motor revolutions per OUTTAKE revolution. Use 1.0 for a direct drive. */
     public static final double MOTOR_REVS_PER_OUTTAKE_REV = 1.0;
 
-    /** Close/mid-field baseline. Long shots add RPM through the table below. */
-    public static final double COMPETITION_RPM = 2800.0;
+    /** Normal field baseline used as a reference for the calibrated table below. */
+    public static final double COMPETITION_RPM = 2900.0;
 
     /**
-     * Conservative first-pass distance calibration. Close shots use the baseline;
-     * long shots progressively add RPM. Replace these with measured make/miss data.
+     * Exponential-like calibration: RPM rises gently through normal shooting
+     * positions, then the slope increases toward the far corners. Linear interpolation
+     * between these points approximates the curve without adding another tuning model.
      */
     public static final double[] SHOT_DISTANCE_IN = {
-            38, 60, 82, 90, 98, 120, 132
+            38, 60, 82, 90, 98, 112, 126, 142, 160
     };
     public static final double[] SHOT_RPM = {
-            COMPETITION_RPM, COMPETITION_RPM, 2900, 3000,
-            3075, 3250, 3350
+            2850, 2850, 2875, 2885, 2900, 2940, 3020, 3180, 3420
     };
 
     // Competition PIDF defaults (RUN_WITHOUT_ENCODER motor mode).
     public static final double DEFAULT_KP = 0.003; // 0.0014
-    public static final double DEFAULT_KI = 0.0005;
+    /** Small trim only; a larger integral caused a +100 RPM rebound after each shot. */
+    public static final double DEFAULT_KI = 0.00015;
     public static final double DEFAULT_KD = 0.0; // 0.0001
-    public static final double DEFAULT_KF = 0.0005; // 0.000435
-    private static final double MAX_INTEGRAL_SUM = 200.0;
+    /** Reduced slightly because the unloaded wheel was settling about 30-50 RPM high. */
+    public static final double DEFAULT_KF = 0.000430;
+    /** Integral only corrects small steady errors; it must not build during spin-up. */
+    public static final double INTEGRAL_ZONE_RPM = 60.0;
+    private static final double MAX_INTEGRAL_SUM = 150.0;
 
     // Full-range servo positions for goBILDA RGB Indicator Light 3118-0808-0002.
     private static final double LED_IDLE_POSITION = 1.000;  // 2500 us, solid white standby
@@ -51,7 +55,7 @@ public class shooterSubsystem {
     private static final double LED_MIN_POSITION_CHANGE = 0.004;
 
     /** Maximum allowed request and how quickly the commanded RPM may change. */
-    public static final double MAX_RPM = 3400.0;
+    public static final double MAX_RPM = 3700.0;
     public static final double SPIN_UP_RPM_PER_SECOND = 15000.0;
     public static final double SPIN_DOWN_RPM_PER_SECOND = 10000.0;
 
@@ -180,16 +184,37 @@ public class shooterSubsystem {
         double targetTPS = rpmToTicksPerSecond(commandedRpm);
         double actualTPS = robot.outtake.getVelocity();
         double errorTPS = targetTPS - actualTPS;
+        double errorRpm = ticksPerSecondToRpm(errorTPS);
+
+        // Do not carry positive recovery torque past the setpoint. Flywheel inertia
+        // already continues accelerating briefly after the error changes sign.
+        if (errorTPS * lastError < 0.0) {
+            integralSum = 0.0;
+        }
 
         pTerm = kP * errorTPS;
-        integralSum += errorTPS * dt;
-        integralSum = Math.max(-MAX_INTEGRAL_SUM, Math.min(MAX_INTEGRAL_SUM, integralSum));
-        iTerm = kI * integralSum;
-
         double derivative = (errorTPS - lastError) / dt;
         dTerm = kD * derivative;
-
         fTerm = kF * targetTPS;
+
+        // Reset stored torque outside the narrow steady-state zone. Inside the
+        // zone, accept integration only when it does not push farther into a
+        // saturated output. This removes the slow +RPM settle after spin-up.
+        if (Math.abs(errorRpm) > INTEGRAL_ZONE_RPM) {
+            integralSum = 0.0;
+        } else {
+            double candidateIntegralSum = clamp(
+                    integralSum + errorTPS * dt,
+                    -MAX_INTEGRAL_SUM, MAX_INTEGRAL_SUM);
+            double candidateITerm = kI * candidateIntegralSum;
+            double candidatePower = pTerm + candidateITerm + dTerm + fTerm;
+            boolean pushesHighSaturation = candidatePower > 1.0 && errorTPS > 0;
+            boolean pushesLowSaturation = candidatePower < 0.0 && errorTPS < 0;
+            if (!pushesHighSaturation && !pushesLowSaturation) {
+                integralSum = candidateIntegralSum;
+            }
+        }
+        iTerm = kI * integralSum;
 
         double motorPower = pTerm + iTerm + dTerm + fTerm;
         // A flywheel only needs forward power. Negative PID output would actively brake it.
@@ -197,7 +222,7 @@ public class shooterSubsystem {
         robot.outtake.setPower(appliedPower);
         lastError = errorTPS;
 
-        double actualRpm = getActualRpm();
+        double actualRpm = ticksPerSecondToRpm(actualTPS);
         if (Math.abs(actualRpm - targetRpm) <= READY_TOLERANCE_RPM) {
             readyLoops++;
         } else {
