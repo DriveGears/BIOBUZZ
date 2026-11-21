@@ -36,12 +36,12 @@ public class Auto2 extends OpMode {
     //Poses
 
 //    private final Pose startPose = poseFactory.of(34.53, 10.41, 105.83);
-    private final Pose startPose = poseFactory.of(32.0, 9.1, 180);
-    private final Pose flowerLineupPose = poseFactory.of(65.02, 39.53, 117.78);
-    private final Pose flowerPose = poseFactory.of(62.19, 42.26, 119.02);
-    private final Pose flower2LineupPose = poseFactory.of(33.38, 127.56, 79.15);
-    private final Pose flowerPose2 = poseFactory.of(34.46, 131.44, 79.85);
-    private final Pose parkPose = poseFactory.of(2.03, 120.74, 0.73);
+private final Pose startPose = poseFactory.of(32.0, 9.1, 180);
+    private final Pose flowerLineupPose = poseFactory.of(7.6, 58.0, 195.3);
+    private final Pose flowerPose = poseFactory.of(3.7, 55.9, 189.5);
+    private final Pose flower2LineupPose = poseFactory.of(33.3, 126.8, 81.1);
+    private final Pose flowerPose2 = poseFactory.of(34.1, 131.5, 81.5);
+    private final Pose parkPose = poseFactory.of(2.0, 121.2, 359.7);
 
     // Path methods
     private Path startToFlowerLineup() {
