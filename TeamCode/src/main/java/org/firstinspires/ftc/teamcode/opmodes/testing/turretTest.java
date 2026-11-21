@@ -1,22 +1,27 @@
 package org.firstinspires.ftc.teamcode.opmodes.testing;
 
+import com.qualcomm.robotcore.eventloop.opmode.Disabled;
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.util.ElapsedTime;
 
 import org.firstinspires.ftc.teamcode.hardware.Hardware;
+import org.firstinspires.ftc.teamcode.subsystems.FlightRecorder;
 import org.firstinspires.ftc.teamcode.subsystems.shooterSubsystem;
 import org.firstinspires.ftc.teamcode.subsystems.turretSubsystem;
 
-@TeleOp(name = "biobuzz testing teleop", group = "Testing")
+@TeleOp(name = "biobuzz turret testing teleop", group = "Testing")
 public class turretTest extends LinearOpMode {
 
     private static final double DRIVE_SPEED = 0.80;
     private static final double STRAFE_MULTIPLIER = 1.10;
-    private static final double MANUAL_TURRET_POWER = 0.25;
+    private static final double MANUAL_TURRET_POWER = 0.40;
+    private static final double INTAKE_POWER = 1.0;
+    private static final double TRANSFER_POWER = 1.0;
 
     private boolean lastShooterButton = false;
     private boolean lastTurretZeroButton = false;
+    private boolean lastFusionToggle = false;
 
     @Override
     public void runOpMode() {
@@ -25,7 +30,23 @@ public class turretTest extends LinearOpMode {
         turretSubsystem turret = new turretSubsystem(robot);
         shooterSubsystem shooter = new shooterSubsystem(robot);
         ElapsedTime loopTimer = new ElapsedTime();
+        robot.intake.setPower(0);
+        robot.transfer.setPower(0);
 
+        FlightRecorder rec = FlightRecorder.start("testteleop");
+        java.util.Map<String, String> cfg = turretSubsystem.configSnapshot();
+        cfg.put("opmode", "turret_biobuzzTestTeleOp");
+        cfg.put("tune_version", turretSubsystem.TUNE_VERSION);
+        rec.writeConfig(cfg);
+        turret.setRecorder(rec);
+        rec.event("--- ODOMETRY INIT ---\n" + robot.getOdometryReport());
+        robot.enableManualBulkReads();
+        telemetry.setMsTransmissionInterval(100);
+
+        for (String line : robot.getOdometryReport().split("\n")) {
+            if (line.startsWith("ODO_CONFIGURED") || line.startsWith("ODO_WARNING")
+                    || line.startsWith("ODO_LEAN") || line.startsWith("ODO_FIRMWARE")) telemetry.addLine(line);
+        }
         telemetry.addLine("BioBuzz TeleOp Ready");
         telemetry.addLine("G1 Left Stick: Drive | Right Trigger: Hold Auto-Aim");
         telemetry.addLine("G1 D-pad L/R: Manual Turret | A: Toggle Shooter/Intakes | B: Stop");
@@ -36,12 +57,17 @@ public class turretTest extends LinearOpMode {
         if (isStopRequested()) {
             turret.stop();
             shooter.stop();
+            robot.intake.setPower(0);
+            robot.transfer.setPower(0);
+            rec.close();
             return;
         }
 
+        rec.event("OPMODE_START tune=" + turretSubsystem.TUNE_VERSION);
         loopTimer.reset();
         try {
             while (opModeIsActive()) {
+                robot.beginLoop();
                 double dtSeconds = loopTimer.seconds();
                 loopTimer.reset();
 
@@ -59,19 +85,26 @@ public class turretTest extends LinearOpMode {
                 // 2. Shooter / Outtake Controls (A to toggle, B to stop)
                 boolean aPressed = gamepad1.a;
                 if (gamepad1.b) {
-                    shooter.setEnabled(false);
+                    setShooterAndFeeders(robot, shooter, false);
                 } else if (aPressed && !lastShooterButton) {
-                    shooter.setEnabled(!shooter.isEnabled());
+                    setShooterAndFeeders(robot, shooter, !shooter.isEnabled());
                 }
                 lastShooterButton = aPressed;
 
                 // Set target RPM for distance if turret has distance, otherwise default
                 if (turret.hasDistance()) {
-                    shooter.setTargetForDistance(turret.getImpactDistanceIn());
+                    shooter.setTargetForDistance(turret.getShooterDistanceIn());
                 } else {
                     shooter.setTargetRpm(shooterSubsystem.COMPETITION_RPM);
                 }
                 shooter.update(dtSeconds);
+
+                // D-pad up toggles odometry fusion so a run can compare it against vision-only aiming.
+                if (gamepad1.dpad_up && !lastFusionToggle) {
+                    turretSubsystem.ODOMETRY_FUSION_ENABLED = !turretSubsystem.ODOMETRY_FUSION_ENABLED;
+                    rec.event("FUSION_TOGGLE enabled=" + turretSubsystem.ODOMETRY_FUSION_ENABLED);
+                }
+                lastFusionToggle = gamepad1.dpad_up;
 
                 // 3. Turret Auto-Aim & Manual Control
                 boolean turretZeroPressed = gamepad1.left_stick_button
@@ -87,7 +120,22 @@ public class turretTest extends LinearOpMode {
                 turret.update(dtSeconds, autoAim,
                         manualTurret * MANUAL_TURRET_POWER);
 
-                // 4. Telemetry
+                // 4. Flight recorder row + telemetry
+                turret.logTo(rec);
+                rec.put("op_dt_ms", dtSeconds * 1000.0);
+                rec.put("in_forward", forward);
+                rec.put("in_strafe", strafe);
+                rec.put("in_turn", turn);
+                rec.put("in_autoaim", autoAim);
+                rec.put("in_dpad_manual", manualTurret);
+                shooter.logTo(rec);
+                rec.endRow();
+
+                telemetry.addData("FUSION (D-pad up)", turretSubsystem.ODOMETRY_FUSION_ENABLED ? "ON" : "OFF (vision only)");
+                telemetry.addData("Log", rec.getStatus());
+                telemetry.addData("Ready after stop (ms)", "%.0f", turret.getReadyAfterStopMs());
+                telemetry.addData("Loop", "%.1f ms (turret %.0f us)", dtSeconds * 1000.0,
+                        turret.getUpdateMicros());
                 telemetry.addData("Drive", "Fwd=%.2f, Strafe=%.2f, Turn=%.2f", forward, strafe, turn);
                 telemetry.addData("Turret Mode", autoAim ? "AUTO-AIM" : "MANUAL");
                 telemetry.addData("Turret Tune", turretSubsystem.TUNE_VERSION);
@@ -125,14 +173,28 @@ public class turretTest extends LinearOpMode {
                 telemetry.addData("Shooter", "Enabled=%s, Actual RPM=%.0f", shooter.isEnabled() ? "ON" : "OFF", shooter.getActualRpm());
                 telemetry.update();
             }
+        } catch (Throwable t) {
+            rec.exception("turret_biobuzzTestTeleOp loop", t);
+            throw t;
         } finally {
+            rec.event("OPMODE_END");
+            rec.close();
             robot.lf.setPower(0);
             robot.lb.setPower(0);
             robot.rf.setPower(0);
             robot.rb.setPower(0);
             turret.stop();
             shooter.stop();
+            robot.intake.setPower(0);
+            robot.transfer.setPower(0);
         }
+    }
+
+    private void setShooterAndFeeders(
+            Hardware robot, shooterSubsystem shooter, boolean enabled) {
+        shooter.setShooterEnabled(enabled);
+        robot.intake.setPower(enabled ? INTAKE_POWER : 0);
+        robot.transfer.setPower(enabled ? TRANSFER_POWER : 0);
     }
 
     private double applyDeadband(double value) {
