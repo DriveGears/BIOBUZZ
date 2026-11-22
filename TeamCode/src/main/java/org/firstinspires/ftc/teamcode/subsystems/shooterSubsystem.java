@@ -27,7 +27,7 @@ public class shooterSubsystem {
             90, 100, 130, 160
     };
     public static final double[] SHOT_RPM = {
-            2900, 2950, 2975, 3025
+            2900, 3000, 3000, 3050
     };
 
     // Competition PIDF defaults (RUN_WITHOUT_ENCODER motor mode).

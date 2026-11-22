@@ -26,7 +26,7 @@ public class turretSubsystem {
     // ========================= VALUES TO CALIBRATE =========================
 
     /** Displayed by the test TeleOp so the deployed tuning profile is verifiable. */
-    public static final String TUNE_VERSION = "fast-v37-persistent-hive-memory";
+    public static final String TUNE_VERSION = "fast-v41-soft-settle";
 
     /** Limelight AprilTag pipeline number. */
     public static final int APRILTAG_PIPELINE = 1;
@@ -49,7 +49,7 @@ public class turretSubsystem {
      * Symmetric angular calibration. Values above 1.0 aim progressively farther
      * from robot-forward on both sides; camera-to-shooter parallax remains separate.
      */
-    public static final double AIM_ANGLE_SCALE = 1.02;
+    public static final double AIM_ANGLE_SCALE = 1.03;
 
     /** Optional per-tag heights, in the same order. Empty uses DEFAULT_TAG_HEIGHT_IN. */
     public static final double[] TAG_HEIGHTS_IN = {};
@@ -112,9 +112,13 @@ public class turretSubsystem {
     public static final double MAX_INTEGRAL_POWER = 0.08;
     /** Only integrate near the target, where static friction is the remaining error. */
     public static final double INTEGRAL_ZONE_TICKS = 6.0;
-    public static final double STICTION_POWER = 0.14;
+    public static final double STICTION_POWER = 0.3;
     public static final double STICTION_FADE_TICKS = 2.5;
-    public static final double SETPOINT_DEADBAND_TICKS = 2.0;
+    /**
+     * Accept the observed 6-7 tick belt/friction settling error instead of
+     * continuously applying holding current and overheating the turret motor.
+     */
+    public static final double SETPOINT_DEADBAND_TICKS = 7.0;
     public static final double FULL_POWER_ERROR_TICKS = 8.0;
     public static final double MIN_PROXIMITY_POWER_SCALE = 0.65;
     public static final double MOTOR_VELOCITY_FILTER_ALPHA = 0.50;
@@ -137,7 +141,7 @@ public class turretSubsystem {
     /** Ready = vision error small for N frames AND turret physically settled. */
     public static final double AIM_TOLERANCE_DEG = 0.90;
     public static final int AIM_STABLE_FRAMES = 2;
-    public static final double READY_POSITION_TOL_TICKS = 2.0;
+    public static final double READY_POSITION_TOL_TICKS = 7.0;
     public static final double READY_MAX_VELOCITY_TPS = 60.0;
 
     /** Median window for tx (frames). 5 added ~2 frames of lag. */
@@ -1480,6 +1484,12 @@ public class turretSubsystem {
                 && Math.abs(controlTargetTicks - dbgRequestedTargetTicks) > 1e-6;
         if (targetClamped) targetVelocityTicksPerSecond = 0;
         double positionError = controlTargetTicks - currentTicks;
+        // Remove the accepted settle band from the error used by the controller.
+        // Without this, crossing 7.0 -> 7.1 ticks abruptly applies the full
+        // 7-tick P + stiction command (about 0.5 power), producing a visible kick.
+        double controlledPositionError = Math.copySign(
+                Math.max(0, Math.abs(positionError) - SETPOINT_DEADBAND_TICKS),
+                positionError);
         double velocityError = targetVelocityTicksPerSecond
                 - filteredMotorVelocityTicksPerSecond;
 
@@ -1495,33 +1505,33 @@ public class turretSubsystem {
         dbgP = dbgD = dbgKV = dbgStiction = dbgRawPower = dbgDesiredPower = 0;
         dbgScale = 1;
         dbgSaturated = false;
-        if (Math.abs(positionError) < SETPOINT_DEADBAND_TICKS
+        if (Math.abs(positionError) <= SETPOINT_DEADBAND_TICKS
                 && Math.abs(targetVelocityTicksPerSecond) < 2.0) {
             appliedPower = 0;
             integralPower = 0;
         } else {
-            if (Math.abs(positionError) <= INTEGRAL_ZONE_TICKS) {
+            if (Math.abs(controlledPositionError) <= INTEGRAL_ZONE_TICKS) {
                 integralPower = clamp(
-                        integralPower + POSITION_KI * positionError * dt,
+                        integralPower + POSITION_KI * controlledPositionError * dt,
                         -MAX_INTEGRAL_POWER, MAX_INTEGRAL_POWER);
             } else {
                 integralPower = 0;
             }
             double stiction = Math.copySign(
                     STICTION_POWER * clamp(
-                            Math.abs(positionError) / STICTION_FADE_TICKS, 0, 1),
-                    positionError);
+                            Math.abs(controlledPositionError) / STICTION_FADE_TICKS, 0, 1),
+                    controlledPositionError);
             double controllerPower =
-                    POSITION_KP * positionError
+                    POSITION_KP * controlledPositionError
                             + VELOCITY_KD * velocityError
                             + VELOCITY_KV * targetVelocityTicksPerSecond
                             + integralPower + stiction;
 
             // Reduce every inner-loop term near the setpoint, as System 1 does.
             double proximityScale = clamp(
-                    Math.abs(positionError) / FULL_POWER_ERROR_TICKS,
+                    Math.abs(controlledPositionError) / FULL_POWER_ERROR_TICKS,
                     MIN_PROXIMITY_POWER_SCALE, 1.0);
-            dbgP = POSITION_KP * positionError;
+            dbgP = POSITION_KP * controlledPositionError;
             dbgD = VELOCITY_KD * velocityError;
             dbgKV = VELOCITY_KV * targetVelocityTicksPerSecond;
             dbgStiction = stiction;

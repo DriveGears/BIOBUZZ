@@ -15,7 +15,7 @@ public class turretTest extends LinearOpMode {
 
     private static final double DRIVE_SPEED = 0.80;
     private static final double STRAFE_MULTIPLIER = 1.10;
-    private static final double MANUAL_TURRET_POWER = 0.40;
+    private static final double MANUAL_TURRET_POWER = 0.90;
     private static final double INTAKE_POWER = 1.0;
     private static final double TRANSFER_POWER = 1.0;
 
