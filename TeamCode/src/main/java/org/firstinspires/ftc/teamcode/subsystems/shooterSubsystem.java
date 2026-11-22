@@ -24,10 +24,10 @@ public class shooterSubsystem {
      * between these points approximates the curve without adding another tuning model.
      */
     public static final double[] SHOT_DISTANCE_IN = {
-            38, 60, 82, 90, 98, 112, 126, 142, 160
+            90, 100, 130, 160
     };
     public static final double[] SHOT_RPM = {
-            2850, 2850, 2875, 2885, 2900, 2940, 3020, 3180, 3420
+            2900, 2950, 2975, 3025
     };
 
     // Competition PIDF defaults (RUN_WITHOUT_ENCODER motor mode).
@@ -35,8 +35,11 @@ public class shooterSubsystem {
     /** Small trim only; a larger integral caused a +100 RPM rebound after each shot. */
     public static final double DEFAULT_KI = 0.00015;
     public static final double DEFAULT_KD = 0.0; // 0.0001
-    /** Reduced slightly because the unloaded wheel was settling about 30-50 RPM high. */
-    public static final double DEFAULT_KF = 0.000430;
+    /**
+     * Log-calibrated at 2900 RPM: 0.000430 settled around 2931 RPM and contributed
+     * to the post-shot rebound. P supplies the temporary recovery torque.
+     */
+    public static final double DEFAULT_KF = 0.000395;
     /** Integral only corrects small steady errors; it must not build during spin-up. */
     public static final double INTEGRAL_ZONE_RPM = 60.0;
     private static final double MAX_INTEGRAL_SUM = 150.0;

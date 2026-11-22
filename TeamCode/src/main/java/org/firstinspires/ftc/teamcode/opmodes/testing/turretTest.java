@@ -51,9 +51,16 @@ public class turretTest extends LinearOpMode {
         telemetry.addLine("G1 Left Stick: Drive | Right Trigger: Hold Auto-Aim");
         telemetry.addLine("G1 D-pad L/R: Manual Turret | A: Toggle Shooter/Intakes | B: Stop");
         telemetry.addLine("Click BOTH sticks: set current turret angle to zero");
-        telemetry.update();
-
-        waitForStart();
+        turretSubsystem.Alliance testAlliance = turretSubsystem.Alliance.BLUE;
+        while (!isStarted() && !isStopRequested()) {
+            if (gamepad1.x) testAlliance = turretSubsystem.Alliance.RED;
+            if (gamepad1.b) testAlliance = turretSubsystem.Alliance.BLUE;
+            turret.setAlliance(testAlliance);
+            telemetry.addData("TEST ALLIANCE", testAlliance);
+            telemetry.addLine("Before START: X = RED, B = BLUE");
+            telemetry.update();
+            idle();
+        }
         if (isStopRequested()) {
             turret.stop();
             shooter.stop();
@@ -63,7 +70,8 @@ public class turretTest extends LinearOpMode {
             return;
         }
 
-        rec.event("OPMODE_START tune=" + turretSubsystem.TUNE_VERSION);
+        rec.event("OPMODE_START tune=" + turretSubsystem.TUNE_VERSION
+                + " alliance=" + testAlliance);
         loopTimer.reset();
         try {
             while (opModeIsActive()) {
@@ -139,11 +147,18 @@ public class turretTest extends LinearOpMode {
                 telemetry.addData("Drive", "Fwd=%.2f, Strafe=%.2f, Turn=%.2f", forward, strafe, turn);
                 telemetry.addData("Turret Mode", autoAim ? "AUTO-AIM" : "MANUAL");
                 telemetry.addData("Turret Tune", turretSubsystem.TUNE_VERSION);
+                telemetry.addData("Alliance / CELL", "%s / %s",
+                        turret.getAlliance(), turret.getSelectedClusterName());
                 telemetry.addData("Target Visible", turret.hasTarget()
                         ? "YES (" + turret.getVisibleTagCount() + " tags: "
                           + turret.getVisibleTagIds() + ")"
                         : turret.isOdometryTrackingActive()
                           ? "ODOMETRY (vision lost)" : "NO");
+                telemetry.addData("Hive Field Memory",
+                        !turret.hasFieldTargetMemory() ? "EMPTY"
+                                : turret.isOdometryPoseValid()
+                                        ? "SAVED / TRACKING"
+                                        : "SAVED / ODOMETRY PAUSED");
                 telemetry.addData("Odo Target", "active=%s age=%.0f ms bearing=%+.1f dist=%.1f",
                         turret.isOdometryTrackingActive(), turret.getTargetAgeMs(),
                         turret.getOdometryTrackedBearingDeg(),

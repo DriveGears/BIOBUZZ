@@ -21,11 +21,11 @@ public abstract class biobuzzTeleop extends LinearOpMode {
     private static final double TRANSFER_POWER = 1.0;
     private static final double TRANSFER_TICKS_PER_REVOLUTION = 28.0;
     private static final double MANUAL_TURRET_POWER = 0.40;
+    private static final double DRIVE_STICK_DEADBAND = 0.05;
     private static final double DASHBOARD_PERIOD_SECONDS = 0.050;
     private static final double OUTTAKE_CURRENT_SAMPLE_SECONDS = 0.100;
 
     private FlightRecorder rec;
-    private boolean lastFusionToggle = false;
     private turretSubsystem turret;
     private shooterSubsystem shooter;
     private ElapsedTime loopTimer;
@@ -47,6 +47,9 @@ public abstract class biobuzzTeleop extends LinearOpMode {
     public void runOpMode() {
         Hardware.resetInstance();
         Hardware robot = Hardware.getInstance(hardwareMap);
+        // Test OpModes can toggle this static setting. Competition TeleOp always
+        // starts with field-relative hive memory enabled and cannot disable it accidentally.
+        turretSubsystem.ODOMETRY_FUSION_ENABLED = true;
 
         // The Pedro Follower was only used for a pose readout and cost a second Pinpoint I2C read every
         // loop (the turret already reads Pinpoint). Pose now comes from the Pinpoint via Hardware.
@@ -105,9 +108,9 @@ public abstract class biobuzzTeleop extends LinearOpMode {
             double dtSeconds = loopTimer.seconds();
             loopTimer.reset();
 
-            double forward = -gamepad1.left_stick_y;
-            double lateral = gamepad1.left_stick_x;
-            double turn = gamepad1.right_stick_x;
+            double forward = -applyDeadband(gamepad1.left_stick_y);
+            double lateral = applyDeadband(gamepad1.left_stick_x);
+            double turn = applyDeadband(gamepad1.right_stick_x);
 
             boolean currentRightTrigger = gamepad1.right_trigger > 0.5;
             if (currentRightTrigger && !lastRightTrigger) {
@@ -147,13 +150,6 @@ public abstract class biobuzzTeleop extends LinearOpMode {
             }
             lastLeftBumper = currentLeftBumper;
             turret.setAutoAimEnabled(autoAimEnabled);
-
-            // D-pad up toggles odometry fusion (compare against vision-only aiming).
-            if (gamepad1.dpad_up && !lastFusionToggle) {
-                turretSubsystem.ODOMETRY_FUSION_ENABLED = !turretSubsystem.ODOMETRY_FUSION_ENABLED;
-                rec.event("FUSION_TOGGLE enabled=" + turretSubsystem.ODOMETRY_FUSION_ENABLED);
-            }
-            lastFusionToggle = gamepad1.dpad_up;
 
             double manualTurretCommand = (gamepad1.dpad_right ? 1.0 : 0.0)
                     - (gamepad1.dpad_left ? 1.0 : 0.0);
@@ -219,7 +215,22 @@ public abstract class biobuzzTeleop extends LinearOpMode {
                     transferCommand, transferRpm);
 
             telemetry.addData("Turret Mode", autoAimEnabled ? "AUTO-AIM" : "MANUAL");
-            telemetry.addData("Target Visible", turret.hasTarget() ? "YES (ID: " + turret.getSelectedTagId() + ")" : "NO");
+            telemetry.addData("Target Visible", turret.hasTarget()
+                    ? "YES (ID: " + turret.getSelectedTagId() + ")"
+                    : turret.isOdometryTrackingActive()
+                            ? "ODOMETRY MEMORY" : "NO");
+            telemetry.addData("Hive Field Memory",
+                    !turret.hasFieldTargetMemory() ? "EMPTY"
+                            : turret.isOdometryPoseValid()
+                                    ? "SAVED / TRACKING"
+                                    : "SAVED / ODOMETRY PAUSED");
+            telemetry.addData("Turret Ticks", "current=%d target=%.1f limits=[%d, %d]",
+                    turret.getCurrentTicks(), turret.getTargetTicks(),
+                    turretSubsystem.MIN_TURRET_TICKS,
+                    turretSubsystem.MAX_TURRET_TICKS);
+            telemetry.addData("Turret Raw / Zero", "%d / %d",
+                    robot.getTurretRawEncoderTicks(),
+                    robot.getTurretEncoderZeroTicks());
             telemetry.addData("Allowed visible IDs", turret.getVisibleTagIds());
             telemetry.addData("Alliance / CELL", "%s / %s",
                     turret.getAlliance(), turret.getSelectedClusterName());
@@ -227,9 +238,18 @@ public abstract class biobuzzTeleop extends LinearOpMode {
                     ? String.format("%.1f deg (UP)", turret.getSelectedClusterRollDeg())
                     : "no scorable CELL");
             telemetry.addData("Prediction Lead", "%.2f deg", turret.getPanLeadDeg());
-            telemetry.addData("Shooter Range", turret.hasDistance()
-                    ? String.format("%.1f in", turret.getShooterDistanceIn())
-                    : "NO VALID RANGE (2900 fallback)");
+            double shooterDistanceIn = turret.getShooterDistanceIn();
+            telemetry.addData("Shooter Range",
+                    turret.hasDistance() && Double.isFinite(shooterDistanceIn)
+                            && shooterDistanceIn > 0
+                            ? String.format(java.util.Locale.US, "%.1f in", shooterDistanceIn)
+                            : "NO VALID RANGE (RPM fallback active)");
+            telemetry.addData("Range Source",
+                    turret.hasDistance() && Double.isFinite(shooterDistanceIn)
+                            ? turret.hasTarget() ? "LIVE TAG" : "HELD ODOMETRY"
+                            : turret.hasTarget()
+                                    ? "TAG VISIBLE; CAMERA GEOMETRY INVALID"
+                                    : "NO ALLOWED TAG");
             telemetry.addData("Chassis Aim Assist", "DISABLED");
             telemetry.addData("Aim Ready?", turret.isAimReady() ? "READY" : "ALIGNING");
             telemetry.addData("Intake Toggle", intakeToggle ? "ON" : "OFF");
@@ -245,7 +265,7 @@ public abstract class biobuzzTeleop extends LinearOpMode {
                     robot.odo.getPosY(DistanceUnit.INCH),
                     Math.toDegrees(robot.odo.getHeading(
                             AngleUnit.RADIANS)));
-            telemetry.addData("FUSION (D-pad up)", turretSubsystem.ODOMETRY_FUSION_ENABLED ? "ON" : "OFF (vision only)");
+            telemetry.addData("FUSION", "ON (competition locked)");
             telemetry.addData("Ready after stop (ms)", "%.0f", turret.getReadyAfterStopMs());
             telemetry.addData("Log", rec.getStatus());
             addControlsTelemetry();
@@ -297,6 +317,8 @@ public abstract class biobuzzTeleop extends LinearOpMode {
         packet.put("transfer.shot_ready", shotReady ? 1.0 : 0.0);
 
         packet.put("turret.current_ticks", turret.getCurrentTicks());
+        packet.put("turret.raw_encoder_ticks", turret.getRawEncoderTicks());
+        packet.put("turret.zero_offset_ticks", turret.getEncoderZeroTicks());
         packet.put("turret.target_ticks", turret.getTargetTicks());
         packet.put("turret.error_ticks", turret.getPositionErrorTicks());
         packet.put("turret.velocity_tps", turret.getFilteredMotorVelocityTicksPerSecond());
@@ -304,6 +326,8 @@ public abstract class biobuzzTeleop extends LinearOpMode {
         packet.put("turret.tx_deg", turret.getFilteredTxDeg());
         packet.put("turret.aim_ready", turret.isAimReady() ? 1.0 : 0.0);
         packet.put("turret.target_visible", turret.hasTarget() ? 1.0 : 0.0);
+        packet.put("turret.field_memory_valid", turret.hasFieldTargetMemory() ? 1.0 : 0.0);
+        packet.put("turret.odometry_pose_valid", turret.isOdometryPoseValid() ? 1.0 : 0.0);
         packet.put("turret.range_valid", turret.hasDistance() ? 1.0 : 0.0);
         packet.put("turret.selected_tag_id", turret.getSelectedTagId());
         packet.put("turret.cluster_first_id", turret.getSelectedClusterFirstId());
@@ -323,6 +347,10 @@ public abstract class biobuzzTeleop extends LinearOpMode {
 
     private void putIfFinite(TelemetryPacket packet, String key, double value) {
         if (Double.isFinite(value)) packet.put(key, value);
+    }
+
+    private static double applyDeadband(double value) {
+        return Math.abs(value) < DRIVE_STICK_DEADBAND ? 0.0 : value;
     }
 
     private void addControlsTelemetry() {

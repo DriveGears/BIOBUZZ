@@ -26,7 +26,7 @@ public class turretSubsystem {
     // ========================= VALUES TO CALIBRATE =========================
 
     /** Displayed by the test TeleOp so the deployed tuning profile is verifiable. */
-    public static final String TUNE_VERSION = "fast-v25-responsive-parallax";
+    public static final String TUNE_VERSION = "fast-v37-persistent-hive-memory";
 
     /** Limelight AprilTag pipeline number. */
     public static final int APRILTAG_PIPELINE = 1;
@@ -42,8 +42,14 @@ public class turretSubsystem {
     /** Per-tag optical corrections, in the same order. Positive subtracts from measured Tx. */
     public static final double[] TAG_AIM_OFFSETS_DEG = {};
 
-    /** Final angular calibration. Negative moves the commanded aim left. */
-    public static final double GLOBAL_AIM_BIAS_DEG = -0.60;
+    /** Optional final angular calibration; zero avoids a constant left/right shift. */
+    public static final double GLOBAL_AIM_BIAS_DEG = 0.0;
+
+    /**
+     * Symmetric angular calibration. Values above 1.0 aim progressively farther
+     * from robot-forward on both sides; camera-to-shooter parallax remains separate.
+     */
+    public static final double AIM_ANGLE_SCALE = 1.02;
 
     /** Optional per-tag heights, in the same order. Empty uses DEFAULT_TAG_HEIGHT_IN. */
     public static final double[] TAG_HEIGHTS_IN = {};
@@ -58,10 +64,12 @@ public class turretSubsystem {
     public static final double MOTOR_DIRECTION_SIGN = 1.0;
 
     /** Encoder safety limits (System 1 limits). */
-    public static final int MIN_TURRET_TICKS = -200;
+    public static final int MIN_TURRET_TICKS = -100;
     public static final int MAX_TURRET_TICKS = 400;
     public static final double MAX_TURRET_POWER = 0.90;
-    /** One physical turret revolution, used to choose an equivalent target at the other soft stop. */
+    /** Prevent a noisy blind-sector bearing from alternating between both soft stops. */
+    public static final double BLIND_SECTOR_SWITCH_HYSTERESIS_DEG = 6.0;
+    /** One physical turret revolution, used to choose a reachable equivalent angle. */
     public static final double TURRET_TICKS_PER_REVOLUTION = 360.0 * TICKS_PER_DEGREE;
 
     /**
@@ -94,14 +102,15 @@ public class turretSubsystem {
     /**
      * v2 controller. v1 multiplied EVERY term (including stiction) by a
      * proximity scale down to 0.25, so the last ~10 deg crept in at ~0.1 power.
-     * Now the scale only trims to 0.65 and stiction fades over 2.5 ticks.
+     * Restored from the mentor's known-good direct controller. Robot-specific
+     * encoder calibration and physical limits remain unchanged.
      */
     public static final double POSITION_KP = 0.060;
     public static final double VELOCITY_KD = 0.0050;
     public static final double VELOCITY_KV = 0.00150;
     public static final double POSITION_KI = 0.020;
     public static final double MAX_INTEGRAL_POWER = 0.08;
-    /** Only integrate close enough that static friction, not travel error, is dominant. */
+    /** Only integrate near the target, where static friction is the remaining error. */
     public static final double INTEGRAL_ZONE_TICKS = 6.0;
     public static final double STICTION_POWER = 0.14;
     public static final double STICTION_FADE_TICKS = 2.5;
@@ -168,9 +177,14 @@ public class turretSubsystem {
     public static final double FUSION_STILL_GAIN_PER_DEG = 0.12;
     /** When the robot is still, hold the setpoint unless the fused target moved more than this. */
     public static final double FUSION_STILL_DEADBAND_TICKS = 2.5;
-    /** A frame that disagrees with the fused estimate by more than this re-seeds it. */
-    public static final double FUSION_REJECT_DEG = 8.0;
-    public static final double FUSION_REJECT_IN = 14.0;
+    /** Large target jumps must agree for several frames before replacing hive memory. */
+    public static final double FUSION_REJECT_DEG = 5.0;
+    public static final double FUSION_REJECT_IN = 10.0;
+    public static final int FUSION_RESEED_CONFIRM_FRAMES = 3;
+    public static final double FUSION_CONFIRM_MATCH_IN = 8.0;
+    public static final double FUSION_CONFIRM_MAX_GAP_MS = 200.0;
+    /** Likewise, do not switch to the other hive cluster from one incorrect tag frame. */
+    public static final int CLUSTER_SWITCH_CONFIRM_FRAMES = 3;
     /** Fused target timeout when REMEMBER_TARGET_DURING_VISION_LOSS is disabled. */
     public static final double FUSION_MAX_AGE_MS = 1500.0;
     private static final double FUSION_RATE_FILTER_ALPHA = 0.35;
@@ -215,7 +229,7 @@ public class turretSubsystem {
 
     /** Odometry prediction settings. */
     public static boolean USE_ODOMETRY_PREDICTION = true;
-    /** Keep the last field-coordinate target until vision replaces it or the selected CELL changes. */
+    /** Keep the last field-coordinate target until a validated vision replacement is ready. */
     public static boolean REMEMBER_TARGET_DURING_VISION_LOSS = true;
     public static double ODOMETRY_RATE_BLEND = 0.70;
     public static double ODOMETRY_FORWARD_SIGN = 1.0;
@@ -360,19 +374,27 @@ public class turretSubsystem {
     private double fusRateDps;
     private double fusPrevBearingDeg = Double.NaN, fusPrevBearingMs = -1;
     private long fusReseeds;
+    private double fusPendingX = Double.NaN, fusPendingY = Double.NaN;
+    private double fusPendingLastMs = -1;
+    private int fusPendingFrames;
     private double fusMinusMeasTicks = Double.NaN;
     private double lastOdoReadMs;
     private double lastWrittenPower = Double.NaN;
     private double stopCandidateSinceMs = -1, moveCandidateSinceMs = -1;
     private boolean targetClamped;
     private boolean targetWrapped;
+    private int pendingClusterFirstId = -1;
+    private int pendingClusterFrames;
+    private double pendingClusterLastFrameTimestamp = Double.NaN;
     private long framesTotal;
     private double lastFrameWallMs = -1;
     private double frameIntervalMs;
     private double dbgStaleness, dbgCaptureLat, dbgTargetingLat, dbgPipelineLat;
     private double dbgRawTxDeg, dbgTicksAtCapture, dbgTurretMoveDeg, dbgGain, dbgMeasuredTargetTicks;
+    private double dbgRawBearingDeg, dbgCalibratedBearingDeg;
     private double dbgRequestedTargetTicks;
     private double dbgP, dbgD, dbgKV, dbgI, dbgStiction, dbgScale, dbgRawPower;
+    private double dbgDesiredPower;
     private boolean dbgSaturated;
     private double robotSpeedInPerSec;
     private boolean robotStopped = true;
@@ -416,7 +438,7 @@ public class turretSubsystem {
         previousPositionErrorValid = false;
         stableAimFrames = 0;
         aimReady = false;
-        resetMeasurementHistory();
+        resetMeasurementHistory(true);
     }
 
     public void setManualPower(double power) {
@@ -432,7 +454,10 @@ public class turretSubsystem {
         targetVisible = false;
         targetTicksInitialized = false;
         fusValid = false;
-        resetMeasurementHistory();
+        odometryTargetInitialized = false;
+        clearFusionPending();
+        clearPendingCluster();
+        resetMeasurementHistory(false);
     }
 
     /**
@@ -648,6 +673,8 @@ public class turretSubsystem {
 
         r.put("tur_auto", autoAimEnabled);
         r.put("tur_ticks", lastTicks);
+        r.put("tur_raw_encoder_ticks", robot.getTurretRawEncoderTicks());
+        r.put("tur_zero_offset_ticks", robot.getTurretEncoderZeroTicks());
         r.put("tur_target_ticks", targetTicks);
         r.put("tur_control_target_ticks", controlTargetTicks);
         r.put("tur_requested_target_ticks", dbgRequestedTargetTicks);
@@ -665,6 +692,7 @@ public class turretSubsystem {
         r.put("tur_stiction", dbgStiction);
         r.put("tur_prox_scale", dbgScale);
         r.put("tur_raw_power", dbgRawPower);
+        r.put("tur_desired_power", dbgDesiredPower);
         r.put("tur_saturated", dbgSaturated);
         r.put("tur_current_a", lastCurrentA);
         r.put("batt_v", lastBatteryV);
@@ -685,6 +713,8 @@ public class turretSubsystem {
         r.put("vis_turret_move_deg", dbgTurretMoveDeg);
         r.put("vis_gain", dbgGain);
         r.put("vis_measured_target_ticks", dbgMeasuredTargetTicks);
+        r.put("aim_raw_bearing_deg", dbgRawBearingDeg);
+        r.put("aim_calibrated_bearing_deg", dbgCalibratedBearingDeg);
         r.put("vis_stable_frames", stableAimFrames);
         r.put("vis_geometry_ok", clusterGeometryValid);
         r.put("vis_dist_in", filteredDistanceIn);
@@ -706,6 +736,9 @@ public class turretSubsystem {
         r.put("fus_valid", fusValid);
         r.put("fus_frames", fusFrames);
         r.put("fus_reseeds", fusReseeds);
+        r.put("fus_pending_frames", fusPendingFrames);
+        r.put("cluster_pending_id", pendingClusterFirstId);
+        r.put("cluster_pending_frames", pendingClusterFrames);
         r.put("fus_x", fusValid ? fusX : Double.NaN);
         r.put("fus_y", fusValid ? fusY : Double.NaN);
         r.put("fus_meas_x", fusMeasX);
@@ -748,7 +781,9 @@ public class turretSubsystem {
 
         List<LLResultTypes.FiducialResult> tags = fresh ? result.getFiducialResults() : null;
         updateVisibleTagText(tags);
-        List<LLResultTypes.FiducialResult> clusterTags = selectClusterTags(tags);
+        double resultTimestamp = result == null ? Double.NaN : result.getTimestamp();
+        List<LLResultTypes.FiducialResult> clusterTags = selectClusterTags(
+                tags, resultTimestamp);
         targetVisible = !clusterTags.isEmpty();
         visibleTagCount = clusterTags.size();
 
@@ -769,7 +804,7 @@ public class turretSubsystem {
 
         odometryTrackingActive = false;
 
-        double frameTimestamp = result.getTimestamp();
+        double frameTimestamp = resultTimestamp;
         if (frameTimestamp == lastFrameTimestamp) return;
         lastFrameTimestamp = frameTimestamp;
         lastTargetSeenMs = nowMs;
@@ -800,6 +835,9 @@ public class turretSubsystem {
         // Robot-relative bearing = camera error + physical turret bearing.
         double bearingAtCaptureDeg = horizontalErrorDeg
                 + ticksAtCapture / (AIM_DIRECTION_SIGN * TICKS_PER_DEGREE);
+        double calibratedBearingAtCaptureDeg = calibratedAimBearingDeg(bearingAtCaptureDeg);
+        dbgRawBearingDeg = bearingAtCaptureDeg;
+        dbgCalibratedBearingDeg = calibratedBearingAtCaptureDeg;
         lastRobotBearingDeg = bearingAtCaptureDeg;
         updateTargetRates(captureTimeMs, bearingAtCaptureDeg);
         double fusionDistanceIn = Double.isFinite(clusterAim.horizontalDistanceIn)
@@ -809,7 +847,13 @@ public class turretSubsystem {
                 bearingAtCaptureDeg, filteredDistanceIn, lastLatencyMs);
         updatePrediction(lastLatencyMs);
 
-        lastVisionErrorDeg = horizontalErrorDeg + turretMovementDeg + panLeadDeg;
+        // Convert the raw target bearing into the calibrated shooter bearing. Expressing
+        // the error against the CURRENT turret position also performs latency compensation:
+        // at scale 1.0 this is exactly horizontalError + turretMovement.
+        double physicalTurretBearingNowDeg = currentTicks
+                / (AIM_DIRECTION_SIGN * TICKS_PER_DEGREE);
+        lastVisionErrorDeg = calibratedBearingAtCaptureDeg
+                - physicalTurretBearingNowDeg + panLeadDeg;
         stableAimFrames = Math.abs(lastVisionErrorDeg) <= AIM_TOLERANCE_DEG
                 ? stableAimFrames + 1 : 0;
 
@@ -888,8 +932,10 @@ public class turretSubsystem {
         if (bearingInitialized) {
             double elapsedMs = captureTimeMs - lastBearingTimeMs;
             if (elapsedMs > 1 && elapsedMs <= MAX_RATE_SAMPLE_GAP_MS) {
+                // Bearings are circular. Crossing +180/-180 is a small continued
+                // motion, not a roughly 360-degree jump that deserves maximum lead.
                 double measuredRate = clamp(
-                        (bearingDeg - lastBearingDeg) / (elapsedMs / 1000.0),
+                        wrapDeg(bearingDeg - lastBearingDeg) / (elapsedMs / 1000.0),
                         -MAX_TARGET_RATE_DEG_PER_SEC, MAX_TARGET_RATE_DEG_PER_SEC);
                 if (Math.abs(measuredRate) < RATE_DEADBAND_DEG_PER_SEC) measuredRate = 0;
                 targetRateDegPerSec += TARGET_RATE_FILTER_ALPHA
@@ -1048,6 +1094,22 @@ public class turretSubsystem {
         return ((d + 540.0) % 360.0 + 360.0) % 360.0 - 180.0;
     }
 
+    /**
+     * Symmetric left/right calibration with its wrap discontinuity inside the
+     * turret's unreachable sector. That makes -170 and +190 degrees receive the
+     * same correction instead of producing different targets for the same bearing.
+     */
+    private static double calibratedAimBearingDeg(double rawBearingDeg) {
+        double minBearingDeg = MIN_TURRET_TICKS
+                / (AIM_DIRECTION_SIGN * TICKS_PER_DEGREE);
+        double maxBearingDeg = MAX_TURRET_TICKS
+                / (AIM_DIRECTION_SIGN * TICKS_PER_DEGREE);
+        double reachableCenterDeg = (minBearingDeg + maxBearingDeg) / 2.0;
+        double canonicalBearingDeg = rawBearingDeg + 360.0
+                * Math.rint((reachableCenterDeg - rawBearingDeg) / 360.0);
+        return AIM_ANGLE_SCALE * canonicalBearingDeg;
+    }
+
     /** Refines the field-anchored target with one camera frame (pose at capture time). */
     private void updateFusionFromFrame(
             double nowMs, double captureTimeMs, double bearingDeg, double distIn) {
@@ -1065,15 +1127,42 @@ public class turretSubsystem {
             fusResidDeg = wrapDeg(bearingDeg - pred[0]);
             fusResidIn = Math.hypot(meas[0] - fusX, meas[1] - fusY);
             if (Math.abs(fusResidDeg) > FUSION_REJECT_DEG || fusResidIn > FUSION_REJECT_IN) {
+                boolean pendingExpired = fusPendingLastMs < 0
+                        || nowMs - fusPendingLastMs > FUSION_CONFIRM_MAX_GAP_MS;
+                boolean matchesPending = !pendingExpired
+                        && Double.isFinite(fusPendingX) && Double.isFinite(fusPendingY)
+                        && Math.hypot(meas[0] - fusPendingX, meas[1] - fusPendingY)
+                                <= FUSION_CONFIRM_MATCH_IN;
+                if (!matchesPending) {
+                    fusPendingX = meas[0];
+                    fusPendingY = meas[1];
+                    fusPendingFrames = 1;
+                } else {
+                    fusPendingFrames++;
+                    double pendingGain = 1.0 / fusPendingFrames;
+                    fusPendingX += pendingGain * (meas[0] - fusPendingX);
+                    fusPendingY += pendingGain * (meas[1] - fusPendingY);
+                }
+                fusPendingLastMs = nowMs;
+                if (fusPendingFrames < FUSION_RESEED_CONFIRM_FRAMES) {
+                    if (fusPendingFrames == 1) {
+                        event(String.format(java.util.Locale.US,
+                                "FUSION_OUTLIER_HELD residDeg=%+.1f residIn=%.1f",
+                                fusResidDeg, fusResidIn));
+                    }
+                    return;
+                }
                 fusReseeds++;
                 event(String.format(java.util.Locale.US,
-                        "FUSION_RESEED residDeg=%+.1f residIn=%.1f frames=%d speed=%.1f hdgRate=%.1f",
-                        fusResidDeg, fusResidIn, fusFrames, robotSpeedInPerSec,
+                        "FUSION_RESEED_CONFIRMED residDeg=%+.1f residIn=%.1f frames=%d speed=%.1f hdgRate=%.1f",
+                        fusResidDeg, fusResidIn, fusPendingFrames, robotSpeedInPerSec,
                         Math.toDegrees(robotHeadingRateRadPerSec)));
-                fusX = meas[0];
-                fusY = meas[1];
+                fusX = fusPendingX;
+                fusY = fusPendingY;
                 fusFrames = 1;
+                clearFusionPending();
             } else {
+                clearFusionPending();
                 double gain = robotStopped
                         ? clamp(FUSION_STILL_GAIN_MIN + FUSION_STILL_GAIN_PER_DEG * Math.abs(fusResidDeg),
                                 FUSION_STILL_GAIN_MIN, FUSION_MEASUREMENT_GAIN)
@@ -1089,10 +1178,18 @@ public class turretSubsystem {
             fusValid = true;
             fusResidDeg = Double.NaN;
             fusResidIn = Double.NaN;
+            clearFusionPending();
             event(String.format(java.util.Locale.US,
                     "FUSION_SEED field=(%.1f, %.1f) dist=%.1f", fusX, fusY, distIn));
         }
         fusLastFrameMs = nowMs;
+    }
+
+    private void clearFusionPending() {
+        fusPendingX = Double.NaN;
+        fusPendingY = Double.NaN;
+        fusPendingLastMs = -1;
+        fusPendingFrames = 0;
     }
 
     /** Every loop: where should the turret point RIGHT NOW according to odometry. */
@@ -1115,17 +1212,19 @@ public class turretSubsystem {
                 new double[]{robotFieldXIn, robotFieldYIn, robotFieldHeadingRad}, fusX, fusY);
         fusBearingDeg = bd[0];
         fusDistanceIn = bd[1];
-        if (!Double.isFinite(fusDistanceIn)
-                || fusDistanceIn < 1.0 || fusDistanceIn > MAX_DISTANCE_IN) {
-            // Preserve the field anchor in case odometry becomes sane again, but do
-            // not let an impossible fused point steer the turret or select shooter RPM.
+        if (!Double.isFinite(fusDistanceIn) || fusDistanceIn < 1.0) {
+            // Preserve the field anchor in case odometry becomes sane again.
             fusBearingDeg = fusDistanceIn = fusTargetTicks = Double.NaN;
             fusPrevBearingMs = -1;
             fusRateDps = 0;
             return;
         }
+        // A distance beyond MAX_DISTANCE_IN is not trustworthy for shooter RPM,
+        // but its field-point bearing is still useful for keeping the turret aimed
+        // while the tag is hidden. hasFusedDistance() applies the range limit.
         // Keep master's shoot-on-the-move lead (panLeadDeg is 0 when PREDICTION_ENABLED is off or the target is lost).
-        fusTargetTicks = AIM_DIRECTION_SIGN * (fusBearingDeg + (PREDICTION_ENABLED ? panLeadDeg : 0.0))
+        fusTargetTicks = AIM_DIRECTION_SIGN * (calibratedAimBearingDeg(fusBearingDeg)
+                + (PREDICTION_ENABLED ? panLeadDeg : 0.0))
                 * TICKS_PER_DEGREE;
 
         if (fusPrevBearingMs >= 0 && lastOdoReadMs > fusPrevBearingMs) {
@@ -1205,7 +1304,7 @@ public class turretSubsystem {
             if (targetAgeMs > HOLD_AFTER_TARGET_LOSS_MS) {
                 selectedTagId = -1;
                 if (!REMEMBER_TARGET_DURING_VISION_LOSS) {
-                    resetMeasurementHistory();
+                    resetMeasurementHistory(false);
                 }
             }
             return;
@@ -1220,8 +1319,7 @@ public class turretSubsystem {
         double relativeLeftIn = -fieldDeltaX * sinHeading
                 + fieldDeltaY * cosHeading;
         double distanceIn = Math.hypot(relativeForwardIn, relativeLeftIn);
-        if (!Double.isFinite(distanceIn) || distanceIn < 1.0
-                || distanceIn > MAX_DISTANCE_IN) {
+        if (!Double.isFinite(distanceIn) || distanceIn < 1.0) {
             // Keep the field point. It may become usable again as the robot
             // returns to range or after a temporary odometry problem clears.
             return;
@@ -1233,16 +1331,21 @@ public class turretSubsystem {
         odometryTrackedBearingDeg = bearingDeg;
         odometryTrackedDistanceIn = distanceIn;
         lastRobotBearingDeg = bearingDeg;
-        filteredDistanceIn = distanceIn;
-        impactDistanceIn = distanceIn;
-        distanceInitialized = true;
+        // Continue angular memory even if a drifting odometry position reports a
+        // range too large to trust for RPM selection.
+        if (distanceIn <= MAX_DISTANCE_IN) {
+            filteredDistanceIn = distanceIn;
+            impactDistanceIn = distanceIn;
+            distanceInitialized = true;
+        }
         odometryTrackingActive = true;
 
         double physicalTurretBearingDeg = currentTicks
                 / (AIM_DIRECTION_SIGN * TICKS_PER_DEGREE);
-        lastVisionErrorDeg = bearingDeg - physicalTurretBearingDeg;
+        double calibratedBearingDeg = calibratedAimBearingDeg(bearingDeg);
+        lastVisionErrorDeg = calibratedBearingDeg - physicalTurretBearingDeg;
         if (autoAimEnabled) {
-            targetTicks = AIM_DIRECTION_SIGN * bearingDeg * TICKS_PER_DEGREE;
+            targetTicks = AIM_DIRECTION_SIGN * calibratedBearingDeg * TICKS_PER_DEGREE;
             targetTicksInitialized = true;
         }
     }
@@ -1346,9 +1449,13 @@ public class turretSubsystem {
             targetVelocityTicksPerSecond = AIM_DIRECTION_SIGN
                     * odometryTargetRateDegPerSec * TICKS_PER_DEGREE;
         } else if (targetAgeMs > HOLD_AFTER_TARGET_LOSS_MS) {
-            targetTicks = currentTicks;
             targetVelocityTicksPerSecond = 0;
             integralPower = 0;
+            // If Pinpoint briefly drops out, hold the last remembered bearing
+            // instead of deliberately forgetting it and following the robot body.
+            if (!REMEMBER_TARGET_DURING_VISION_LOSS || !targetTicksInitialized) {
+                targetTicks = currentTicks;
+            }
         } else if (ODOMETRY_FEEDFORWARD_ENABLED && odometryRateValid) {
             targetVelocityTicksPerSecond = AIM_DIRECTION_SIGN
                     * odometryTargetRateDegPerSec * TICKS_PER_DEGREE;
@@ -1366,11 +1473,12 @@ public class turretSubsystem {
         dbgRequestedTargetTicks = targetTicks;
         controlTargetTicks = resolveTargetTicksWithinLimits(
                 dbgRequestedTargetTicks, currentTicks);
-        targetWrapped = isEquivalentRevolution(dbgRequestedTargetTicks, controlTargetTicks)
+        targetWrapped = isEquivalentRevolution(
+                dbgRequestedTargetTicks, controlTargetTicks)
                 && Math.abs(controlTargetTicks - dbgRequestedTargetTicks) > 1e-6;
         targetClamped = !targetWrapped
-                && (dbgRequestedTargetTicks < MIN_TURRET_TICKS
-                        || dbgRequestedTargetTicks > MAX_TURRET_TICKS);
+                && Math.abs(controlTargetTicks - dbgRequestedTargetTicks) > 1e-6;
+        if (targetClamped) targetVelocityTicksPerSecond = 0;
         double positionError = controlTargetTicks - currentTicks;
         double velocityError = targetVelocityTicksPerSecond
                 - filteredMotorVelocityTicksPerSecond;
@@ -1384,7 +1492,7 @@ public class turretSubsystem {
         previousPositionError = positionError;
         previousPositionErrorValid = true;
 
-        dbgP = dbgD = dbgKV = dbgStiction = dbgRawPower = 0;
+        dbgP = dbgD = dbgKV = dbgStiction = dbgRawPower = dbgDesiredPower = 0;
         dbgScale = 1;
         dbgSaturated = false;
         if (Math.abs(positionError) < SETPOINT_DEADBAND_TICKS
@@ -1422,7 +1530,7 @@ public class turretSubsystem {
             appliedPower = MOTOR_DIRECTION_SIGN * controllerPower * proximityScale;
         }
         dbgI = integralPower;
-
+        dbgDesiredPower = appliedPower;
         dbgSaturated = Math.abs(appliedPower) > MAX_TURRET_POWER;
         appliedPower = limitAtSoftStops(
                 clamp(appliedPower, -MAX_TURRET_POWER, MAX_TURRET_POWER), currentTicks);
@@ -1446,6 +1554,7 @@ public class turretSubsystem {
         integralPower = 0;
         previousPositionErrorValid = false;
         dbgP = dbgD = dbgKV = dbgStiction = dbgRawPower = dbgI = 0;
+        dbgDesiredPower = manualPower;
         dbgScale = 1;
         appliedPower = limitAtSoftStops(manualPower, currentTicks);
         targetClamped = false;
@@ -1473,18 +1582,17 @@ public class turretSubsystem {
     }
 
     /**
-     * Maps an angular target to an equivalent encoder target inside the soft
-     * stops. For example, a target beyond the positive stop can become the
-     * same physical angle one revolution lower, making the turret reverse and
-     * approach it from the negative side. If the angle lies in the turret's
-     * physical blind sector, no equivalent is reachable and the nearest stop
-     * is returned.
+     * Maps an angular target to the closest equivalent encoder target inside
+     * the physical soft stops. If the angle is in the blind sector, returns
+     * the appropriate stop until an equivalent angle becomes reachable.
      */
-    static double resolveTargetTicksWithinLimits(double requestedTicks, double currentTicks) {
+    static double resolveTargetTicksWithinLimits(
+            double requestedTicks, double currentTicks) {
         if (!Double.isFinite(requestedTicks)) {
             return clampStatic(currentTicks, MIN_TURRET_TICKS, MAX_TURRET_TICKS);
         }
-        if (requestedTicks >= MIN_TURRET_TICKS && requestedTicks <= MAX_TURRET_TICKS) {
+        if (requestedTicks >= MIN_TURRET_TICKS
+                && requestedTicks <= MAX_TURRET_TICKS) {
             return requestedTicks;
         }
 
@@ -1493,8 +1601,10 @@ public class turretSubsystem {
             return clampStatic(requestedTicks, MIN_TURRET_TICKS, MAX_TURRET_TICKS);
         }
 
-        long firstTurn = (long) Math.ceil((MIN_TURRET_TICKS - requestedTicks) / revolution);
-        long lastTurn = (long) Math.floor((MAX_TURRET_TICKS - requestedTicks) / revolution);
+        long firstTurn = (long) Math.ceil(
+                (MIN_TURRET_TICKS - requestedTicks) / revolution);
+        long lastTurn = (long) Math.floor(
+                (MAX_TURRET_TICKS - requestedTicks) / revolution);
         if (firstTurn <= lastTurn) {
             double best = requestedTicks + firstTurn * revolution;
             double bestTravel = Math.abs(best - currentTicks);
@@ -1508,7 +1618,31 @@ public class turretSubsystem {
             }
             return best;
         }
-        return clampStatic(requestedTicks, MIN_TURRET_TICKS, MAX_TURRET_TICKS);
+        // The requested angle is in the physical blind sector. Choose the soft
+        // stop that is closest in ANGLE, not the one closest numerically. Near
+        // the middle of that sector, stay on the side nearest the current turret
+        // position so a little odometry/vision noise cannot command a full wrap.
+        double distanceToMin = equivalentTickDistance(
+                requestedTicks, MIN_TURRET_TICKS, revolution);
+        double distanceToMax = equivalentTickDistance(
+                requestedTicks, MAX_TURRET_TICKS, revolution);
+        double switchHysteresisTicks = BLIND_SECTOR_SWITCH_HYSTERESIS_DEG
+                * TICKS_PER_DEGREE;
+        if (Math.abs(distanceToMin - distanceToMax) <= switchHysteresisTicks) {
+            return Math.abs(currentTicks - MIN_TURRET_TICKS)
+                    <= Math.abs(currentTicks - MAX_TURRET_TICKS)
+                            ? MIN_TURRET_TICKS : MAX_TURRET_TICKS;
+        }
+        return distanceToMin < distanceToMax
+                ? MIN_TURRET_TICKS : MAX_TURRET_TICKS;
+    }
+
+    private static double equivalentTickDistance(
+            double firstTicks, double secondTicks, double revolution) {
+        double delta = (firstTicks - secondTicks) % revolution;
+        if (delta > revolution / 2.0) delta -= revolution;
+        if (delta < -revolution / 2.0) delta += revolution;
+        return Math.abs(delta);
     }
 
     private static boolean isEquivalentRevolution(double firstTicks, double secondTicks) {
@@ -1521,10 +1655,11 @@ public class turretSubsystem {
     }
 
     private List<LLResultTypes.FiducialResult> selectClusterTags(
-            List<LLResultTypes.FiducialResult> tags) {
+            List<LLResultTypes.FiducialResult> tags, double frameTimestamp) {
         List<LLResultTypes.FiducialResult> empty = new ArrayList<>();
         if (tags == null || tags.isEmpty()) {
             selectedClusterRollDeg = Double.NaN;
+            clearPendingCluster();
             return empty;
         }
 
@@ -1546,21 +1681,49 @@ public class turretSubsystem {
         ClusterCandidate selected = chooseScorableCluster(first, second);
         if (selected == null) {
             selectedClusterRollDeg = Double.NaN;
+            clearPendingCluster();
             return empty;
         }
 
         if (selectedClusterFirstId != selected.firstId) {
+            int previousClusterFirstId = selectedClusterFirstId;
+            if (pendingClusterFirstId != selected.firstId) {
+                pendingClusterFirstId = selected.firstId;
+                pendingClusterFrames = 1;
+                pendingClusterLastFrameTimestamp = frameTimestamp;
+            } else if (frameTimestamp != pendingClusterLastFrameTimestamp) {
+                pendingClusterFrames++;
+                pendingClusterLastFrameTimestamp = frameTimestamp;
+            }
+            if (pendingClusterFrames < CLUSTER_SWITCH_CONFIRM_FRAMES) {
+                selectedClusterRollDeg = Double.NaN;
+                return empty;
+            }
             selectedClusterFirstId = selected.firstId;
             targetTicksInitialized = false;
-            fusValid = false;            // the fused field target belonged to the previous cluster
-            resetMeasurementHistory();
+            // Keep the previous field point until updateFusionFromFrame accepts
+            // a consistent replacement. Clearing it here made the turret forget
+            // the hive during the exact transition where memory matters most.
+            clearFusionPending();
+            resetMeasurementHistory(true);
+            event(String.format(java.util.Locale.US,
+                    "CELL_SWITCH old=%d new=%d memory=%s",
+                    previousClusterFirstId, selected.firstId,
+                    fusValid ? "PRESERVED" : "EMPTY"));
         }
+        clearPendingCluster();
         selectedClusterRollDeg = selected.rollDeg;
         selectedTagId = Integer.MAX_VALUE;
         for (LLResultTypes.FiducialResult tag : selected.tags) {
             selectedTagId = Math.min(selectedTagId, tag.getFiducialId());
         }
         return selected.tags;
+    }
+
+    private void clearPendingCluster() {
+        pendingClusterFirstId = -1;
+        pendingClusterFrames = 0;
+        pendingClusterLastFrameTimestamp = Double.NaN;
     }
 
     private ClusterCandidate createClusterCandidate(
@@ -1753,15 +1916,10 @@ public class turretSubsystem {
         int index = indexOfTag(id);
         if (index < 0 || index >= CLUSTER_TAG_X_OFFSETS_IN.length) return 0;
 
-        // On the two scoring-wall CELLs, the official left-to-right tag order is
-        // 33,32,31,30 and 45,44,43,42. The audience-side CELLs run in ascending
-        // order, so only the scoring clusters need their geometry index reversed.
-        boolean descendingLeftToRight =
-                selectedClusterFirstId == RED_SCORING_CLUSTER_FIRST_ID
-                        || selectedClusterFirstId == BLUE_SCORING_CLUSTER_FIRST_ID;
-        int geometryIndex = descendingLeftToRight
-                ? CLUSTER_TAG_X_OFFSETS_IN.length - 1 - index : index;
-        return CLUSTER_TAG_X_OFFSETS_IN[geometryIndex];
+        // These offsets use the Limelight Tx/image convention and are ordered by
+        // increasing tag ID. Reversing the scoring-wall IDs made outer-tag-only
+        // observations of the same CELL disagree by about 11 degrees.
+        return CLUSTER_TAG_X_OFFSETS_IN[index];
     }
 
     private static class ClusterAim {
@@ -1853,7 +2011,7 @@ public class turretSubsystem {
                 ? rate - Math.copySign(RATE_DEADBAND_DEG_PER_SEC, rate) : 0;
     }
 
-    private void resetMeasurementHistory() {
+    private void resetMeasurementHistory(boolean preserveFieldTarget) {
         lastFrameTimestamp = -1;
         txHistoryCount = 0;
         distanceHistoryCount = 0;
@@ -1865,7 +2023,7 @@ public class turretSubsystem {
         targetRateDegPerSec = 0;
         rangeRateInPerSec = 0;
         lastRobotBearingDeg = Double.NaN;
-        odometryTargetInitialized = false;
+        if (!preserveFieldTarget) odometryTargetInitialized = false;
         odometryTrackingActive = false;
         odometryTrackedBearingDeg = 0;
         odometryTrackedDistanceIn = 0;
@@ -1878,6 +2036,7 @@ public class turretSubsystem {
 
     public boolean hasTarget() { return targetVisible; }
     public boolean hasDistance() { return distanceInitialized; }
+    public boolean hasFieldTargetMemory() { return fusValid || odometryTargetInitialized; }
     public boolean isAimReady() { return aimReady; }
     public int getSelectedTagId() { return selectedTagId; }
     public Alliance getAlliance() { return alliance; }
@@ -1943,6 +2102,8 @@ public class turretSubsystem {
     public double getLastVisionErrorDeg() { return lastVisionErrorDeg; }
     public double getLastLatencyMs() { return lastLatencyMs; }
     public int getCurrentTicks() { return lastTicks; }
+    public int getRawEncoderTicks() { return robot.getTurretRawEncoderTicks(); }
+    public int getEncoderZeroTicks() { return robot.getTurretEncoderZeroTicks(); }
     public double getTargetTicks() { return controlTargetTicks; }
     public double getPositionErrorTicks() {
         return controlTargetTicks - lastTicks;
