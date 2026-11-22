@@ -1,0 +1,230 @@
+package org.firstinspires.ftc.teamcode;
+
+import com.qualcomm.robotcore.eventloop.opmode.OpMode;
+import com.qualcomm.robotcore.eventloop.opmode.Autonomous;
+import com.qualcomm.robotcore.util.ElapsedTime;
+import com.pedropathing.follower.Follower;
+import org.firstinspires.ftc.teamcode.PedroPathing.Constants;
+import org.firstinspires.ftc.teamcode.hardware.Hardware;
+import org.firstinspires.ftc.teamcode.tools.AutoLogger;
+import org.firstinspires.ftc.teamcode.subsystems.shooterSubsystem;
+import org.firstinspires.ftc.teamcode.subsystems.turretSubsystem;
+import com.pedropathing.api.PoseFactory;
+import com.pedropathing.math.Pose;
+import com.pedropathing.paths.Path;
+import com.pedropathing.ivy.Command;
+import com.pedropathing.ivy.Scheduler;
+
+import static com.pedropathing.api.Paths.line;
+import static com.pedropathing.ivy.Scheduler.schedule;
+import static com.pedropathing.ivy.commands.Commands.waitMs;
+import static com.pedropathing.ivy.commands.Commands.waitUntil;
+import static com.pedropathing.ivy.commands.Commands.instant;
+import static com.pedropathing.ivy.groups.Groups.sequential;
+import static com.pedropathing.ivy.groups.Groups.race;
+import static com.pedropathing.ivy.pedro.PedroCommands.follow;
+
+@Autonomous(name = "Red Auto", group = "Competition")
+public class redAuto extends OpMode {
+    private Follower follower;
+    private Hardware robot;
+    private turretSubsystem turret;
+    private shooterSubsystem shooter;
+    private final ElapsedTime loopTimer = new ElapsedTime();
+    private boolean shotSkipped;
+    private final AutoLogger log = new AutoLogger();
+    private final ElapsedTime runTimer = new ElapsedTime();
+    private String step = "init";
+    private Pose target = null;
+    private final PoseFactory poseFactory = PoseFactory.degrees();
+
+    //Poses
+    private final Pose startPose = poseFactory.of(32.0, 9.1, 180);
+    private final Pose flowerLineupPose = poseFactory.of(7.6, 58.0, 195.3);
+    private final Pose flowerPose = poseFactory.of(3.7, 55.9, 189.5);
+    private final Pose flower2LineupPose = poseFactory.of(33.3, 126.8, 81.1);
+    private final Pose flowerPose2 = poseFactory.of(34.1, 131.5, 81.5);
+    private final Pose parkPose = poseFactory.of(2.0, 121.2, 359.7);
+    // Path methods
+    private Path startToFlowerLineup() {
+        return line(startPose, flowerLineupPose).linear(startPose, flowerLineupPose);
+    }
+
+    private Path flowerLineupToFlower() {
+        return line(flowerLineupPose, flowerPose).linear(flowerLineupPose, flowerPose);
+    }
+
+    private Path flowerToLineup(){
+        return line(flowerPose, flower2LineupPose).linear(flowerPose, flower2LineupPose);
+    }
+
+    private Path lineupToFlower2(){
+        return line(flower2LineupPose, flowerPose2).linear(flower2LineupPose, flowerPose2);
+    }
+
+    private Path park(){
+        return line(flowerPose2, parkPose).linear(flowerPose2, parkPose);
+    }
+
+    /** Collect for two seconds, then keep the intake on to retain the balls. */
+    private Command collectFromFlower() {
+        return sequential(
+                instant(() -> robot.intake.setPower(0.85)),
+                waitMs(2000)
+        );
+    }
+
+    private Command shootAtUpwardCell(long feedMs) {
+        return sequential(
+                instant(() -> {
+                    shotSkipped = false;
+                    shooter.setTargetRpm(shooterSubsystem.COMPETITION_RPM);
+                    shooter.setShooterEnabled(true);
+                    turret.setAutoAimEnabled(true);
+                }),
+                race(
+                        waitUntil(() -> shooter.getActualRpm() >= 0.9 * shooterSubsystem.COMPETITION_RPM),
+                        waitMs(2500)
+                ),
+                instant(() -> robot.transfer.setPower(shooterSubsystem.TRANSFER_POWER)),
+                waitMs(feedMs),
+                instant(() -> {
+                    robot.transfer.setPower(0);
+                    turret.setAutoAimEnabled(false);
+                })
+        );
+    }
+
+    /** Tags the log with the current step and the pose we are driving toward. */
+    private Command mark(String name, Pose to) {
+        return instant(() -> { step = name; target = to; });
+    }
+
+    private Command autoRoutine() {
+        return sequential(
+                instant(() -> {
+                    robot.intake.setPower(0.85);
+                    shooter.setTargetRpm(shooterSubsystem.COMPETITION_RPM);
+                    shooter.setShooterEnabled(true);
+                }),
+                mark("startToFlowerLineup", flowerLineupPose),
+                follow(follower, startToFlowerLineup()),
+                mark("settleLineup1", flowerLineupPose),
+                waitMs(400),
+                mark("lineupToFlower", flowerPose),
+                follow(follower, flowerLineupToFlower()),
+                mark("collect", flowerPose),
+                collectFromFlower(),
+                mark("flowerToLineup", flower2LineupPose),
+                follow(follower, flowerToLineup()),
+                mark("settleLineup2", flower2LineupPose),
+                waitMs(400),
+                mark("outtakeAtLineup2", flower2LineupPose),
+                shootAtUpwardCell(3000),
+                mark("lineupToFlower2", flowerPose2),
+                follow(follower, lineupToFlower2()),
+                mark("collect2", flowerPose2),
+                collectFromFlower(),
+                mark("shoot", flowerPose2),
+                shootAtUpwardCell(4500),
+                instant(() -> shooter.setShooterEnabled(false)),
+                mark("park", parkPose),
+                follow(follower, park()),
+                mark("done", parkPose)
+        );
+    }
+
+    @Override
+    public void init() {
+        Scheduler.reset();
+        Hardware.resetInstance();
+        robot = Hardware.getInstance(hardwareMap);
+        follower = Constants.create(hardwareMap);
+        turret = new turretSubsystem(robot);
+        shooter = new shooterSubsystem(robot);
+        turret.setAlliance(turretSubsystem.Alliance.RED);
+        shooter.setTargetRpm(shooterSubsystem.COMPETITION_RPM);
+        follower.setPose(startPose);
+        follower.update();
+        loopTimer.reset();
+        telemetry.addData("Status", "Ready - Keep robot still before Play");
+        telemetry.addData("X", follower.pose().x());
+        telemetry.addData("Y", follower.pose().y());
+        telemetry.addData("Heading", Math.toDegrees(follower.pose().heading()));
+        telemetry.update();
+    }
+
+    @Override
+    public void init_loop() {
+        if (gamepad1.b) turret.setAlliance(turretSubsystem.Alliance.RED);
+        if (gamepad1.x) turret.setAlliance(turretSubsystem.Alliance.BLUE);
+
+        follower.update();
+        telemetry.addData("Status", "Ready - Keep robot still before Play");
+        telemetry.addData("Alliance", turret.getAlliance());
+        telemetry.addLine("INIT selection: B = RED | X = BLUE");
+        telemetry.addData("X", follower.pose().x());
+        telemetry.addData("Y", follower.pose().y());
+        telemetry.addData("Heading", Math.toDegrees(follower.pose().heading()));
+        telemetry.update();
+    }
+
+    @Override
+    public void start() {
+        loopTimer.reset();
+        runTimer.reset();
+        log.open();
+        schedule(autoRoutine());
+    }
+
+    @Override
+    public void loop() {
+        double dtSeconds = loopTimer.seconds();
+        loopTimer.reset();
+
+        Scheduler.execute();
+        follower.update();
+        shooter.update(dtSeconds);
+        turret.update(dtSeconds);
+
+        Pose cur = follower.pose();
+        Pose tgt = target != null ? target : cur;
+        log.row(runTimer.seconds(), step, cur.x(), cur.y(), Math.toDegrees(cur.heading()),
+                tgt.x(), tgt.y(), Math.toDegrees(tgt.heading()), String.valueOf(follower.mode()),
+                shooter.getTargetRpm(), shooter.getActualRpm(), turret.isAimReady(),
+                robot.intake.getPower(), robot.transfer.getPower(), dtSeconds * 1000.0);
+
+        telemetry.addData("Step", step);
+        telemetry.addData("X", follower.pose().x());
+        telemetry.addData("Y", follower.pose().y());
+        telemetry.addData("Heading", Math.toDegrees(follower.pose().heading()));
+        telemetry.addData("Follower Mode", follower.mode());
+        telemetry.addData("Alliance / CELL", "%s / %s",
+                turret.getAlliance(), turret.getSelectedClusterName());
+        telemetry.addData("CELL Roll", turret.getSelectedClusterRollDeg());
+        telemetry.addData("Aim Ready", turret.isAimReady());
+        telemetry.addData("Chassis Aim Assist", "DISABLED");
+        telemetry.addData("Shooter RPM", "target=%.0f actual=%.0f",
+                shooter.getTargetRpm(), shooter.getActualRpm());
+        telemetry.addData("Intake", robot.intake.getPower() != 0
+                ? "ON - RETAINING" : "OFF");
+        telemetry.addData("Transfer", robot.transfer.getPower() != 0
+                ? "FEEDING" : "OFF");
+        telemetry.addData("Shot", shotSkipped
+                ? "SKIPPED - aim/RPM not ready" : "armed/running");
+        telemetry.update();
+    }
+
+    @Override
+    public void stop() {
+        log.close();
+        Scheduler.reset();
+        if (robot != null) {
+            robot.intake.setPower(0);
+            robot.transfer.setPower(0);
+        }
+        if (follower != null) follower.stop();
+        if (turret != null) turret.stop();
+        if (shooter != null) shooter.stop();
+    }
+}

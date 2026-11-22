@@ -42,9 +42,10 @@ public class redAuto extends OpMode {
     private final Pose startPose = poseFactory.of(32.0, 9.1, 180);
     private final Pose flowerLineupPose = poseFactory.of(7.6, 58.0, 195.3);
     private final Pose flowerPose = poseFactory.of(3.7, 55.9, 189.5);
-    private final Pose flower2LineupPose = poseFactory.of(33.3, 126.8, 81.1);
-    private final Pose flowerPose2 = poseFactory.of(34.1, 131.5, 81.5);
-    private final Pose parkPose = poseFactory.of(2.0, 121.2, 359.7);
+    private final Pose flower2LineupPose = poseFactory.of(32.0, 124, 80.5);
+    private final Pose flowerPose2 = poseFactory.of(33.0, 130.9, 81.3);
+    private final Pose parkPose = poseFactory.of(1.3, 118.6, 2.0);
+
     // Path methods
     private Path startToFlowerLineup() {
         return line(startPose, flowerLineupPose).linear(startPose, flowerLineupPose);
