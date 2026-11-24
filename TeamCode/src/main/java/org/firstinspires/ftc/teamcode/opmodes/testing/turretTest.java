@@ -1,6 +1,5 @@
 package org.firstinspires.ftc.teamcode.opmodes.testing;
 
-import com.qualcomm.robotcore.eventloop.opmode.Disabled;
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.util.ElapsedTime;
@@ -15,7 +14,7 @@ public class turretTest extends LinearOpMode {
 
     private static final double DRIVE_SPEED = 0.80;
     private static final double STRAFE_MULTIPLIER = 1.10;
-    private static final double MANUAL_TURRET_POWER = 0.90;
+    private static final double MANUAL_TURRET_POWER = 0.40;
     private static final double INTAKE_POWER = 1.0;
     private static final double TRANSFER_POWER = 1.0;
 
@@ -51,6 +50,7 @@ public class turretTest extends LinearOpMode {
         telemetry.addLine("G1 Left Stick: Drive | Right Trigger: Hold Auto-Aim");
         telemetry.addLine("G1 D-pad L/R: Manual Turret | A: Toggle Shooter/Intakes | B: Stop");
         telemetry.addLine("Click BOTH sticks: set current turret angle to zero");
+        telemetry.addLine("LED: white=manual, red=aligning, green=locked");
         turretSubsystem.Alliance testAlliance = turretSubsystem.Alliance.BLUE;
         while (!isStarted() && !isStopRequested()) {
             if (gamepad1.x) testAlliance = turretSubsystem.Alliance.RED;
@@ -183,6 +183,12 @@ public class turretTest extends LinearOpMode {
                         turret.getFilteredMotorVelocityTicksPerSecond(),
                         turret.getAppliedPower(),
                         turret.getIntegralPower());
+                telemetry.addData("PID Gains", "P=%.4f I=%.4f D=%.4f kV=%.4f kS=%.3f",
+                        turretSubsystem.POSITION_KP,
+                        turretSubsystem.POSITION_KI,
+                        turretSubsystem.VELOCITY_KD,
+                        turretSubsystem.VELOCITY_KV,
+                        turretSubsystem.STATIC_FRICTION_POWER);
                 telemetry.addData("Turret Vision", "tx=%+.2f deg, err=%+.2f deg",
                         turret.getFilteredTxDeg(), turret.getLastVisionErrorDeg());
                 telemetry.addData("Shooter", "Enabled=%s, Actual RPM=%.0f", shooter.isEnabled() ? "ON" : "OFF", shooter.getActualRpm());

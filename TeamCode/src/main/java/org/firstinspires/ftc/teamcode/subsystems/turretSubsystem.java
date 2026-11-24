@@ -19,14 +19,14 @@ import java.util.Arrays;
 import java.util.Deque;
 import java.util.List;
 
-/** Owns AprilTag tracking, motion prediction, and turret motor control (Merged & Optimized). */
+/** Owns AprilTag/odometry hive tracking and turret motor control. */
 @Config
 public class turretSubsystem {
 
     // ========================= VALUES TO CALIBRATE =========================
 
     /** Displayed by the test TeleOp so the deployed tuning profile is verifiable. */
-    public static final String TUNE_VERSION = "fast-v41-soft-settle";
+    public static final String TUNE_VERSION = "clean-v1-mechanical-reset";
 
     /** Limelight AprilTag pipeline number. */
     public static final int APRILTAG_PIPELINE = 1;
@@ -42,14 +42,12 @@ public class turretSubsystem {
     /** Per-tag optical corrections, in the same order. Positive subtracts from measured Tx. */
     public static final double[] TAG_AIM_OFFSETS_DEG = {};
 
-    /** Optional final angular calibration; zero avoids a constant left/right shift. */
-    public static final double GLOBAL_AIM_BIAS_DEG = 0.0;
-
     /**
      * Symmetric angular calibration. Values above 1.0 aim progressively farther
      * from robot-forward on both sides; camera-to-shooter parallax remains separate.
+     * Keep at 1.0 until the turret PID and mechanics are verified.
      */
-    public static final double AIM_ANGLE_SCALE = 1.03;
+    public static double AIM_ANGLE_SCALE = 1.0;
 
     /** Optional per-tag heights, in the same order. Empty uses DEFAULT_TAG_HEIGHT_IN. */
     public static final double[] TAG_HEIGHTS_IN = {};
@@ -63,12 +61,13 @@ public class turretSubsystem {
     /** Flip this sign if motor power and encoder tick direction disagree. */
     public static final double MOTOR_DIRECTION_SIGN = 1.0;
 
-    /** Encoder safety limits (System 1 limits). */
+    /** Encoder safety limits. */
     public static final int MIN_TURRET_TICKS = -100;
     public static final int MAX_TURRET_TICKS = 400;
-    public static final double MAX_TURRET_POWER = 0.90;
+    public static final double MAX_TURRET_POWER = 0.75;
     /** Prevent a noisy blind-sector bearing from alternating between both soft stops. */
     public static final double BLIND_SECTOR_SWITCH_HYSTERESIS_DEG = 6.0;
+    private static final double WRAP_ROUTE_MIN_VELOCITY_TPS = 5.0;
     /** One physical turret revolution, used to choose a reachable equivalent angle. */
     public static final double TURRET_TICKS_PER_REVOLUTION = 360.0 * TICKS_PER_DEGREE;
 
@@ -100,27 +99,17 @@ public class turretSubsystem {
     public static final double CLUSTER_AIM_POINT_ABOVE_TAGS_IN = 5.622;
 
     /**
-     * v2 controller. v1 multiplied EVERY term (including stiction) by a
-     * proximity scale down to 0.25, so the last ~10 deg crept in at ~0.1 power.
-     * Restored from the mentor's known-good direct controller. Robot-specific
-     * encoder calibration and physical limits remain unchanged.
+     * Clean PID starting point for the rebuilt mechanism. These are deliberately
+     * Dashboard-tunable and contain no friction-specific compensation yet.
      */
-    public static final double POSITION_KP = 0.060;
-    public static final double VELOCITY_KD = 0.0050;
-    public static final double VELOCITY_KV = 0.00150;
-    public static final double POSITION_KI = 0.020;
-    public static final double MAX_INTEGRAL_POWER = 0.08;
-    /** Only integrate near the target, where static friction is the remaining error. */
-    public static final double INTEGRAL_ZONE_TICKS = 6.0;
-    public static final double STICTION_POWER = 0.3;
-    public static final double STICTION_FADE_TICKS = 2.5;
-    /**
-     * Accept the observed 6-7 tick belt/friction settling error instead of
-     * continuously applying holding current and overheating the turret motor.
-     */
-    public static final double SETPOINT_DEADBAND_TICKS = 7.0;
-    public static final double FULL_POWER_ERROR_TICKS = 8.0;
-    public static final double MIN_PROXIMITY_POWER_SCALE = 0.65;
+    public static double POSITION_KP = 0.030;
+    public static double POSITION_KI = 0.0;
+    public static double VELOCITY_KD = 0.0030;
+    public static double VELOCITY_KV = 0.0;
+    public static double STATIC_FRICTION_POWER = 0.0;
+    public static double MAX_INTEGRAL_POWER = 0.08;
+    public static double INTEGRAL_ZONE_TICKS = 12.0;
+    public static double POSITION_TOLERANCE_TICKS = 1.5;
     public static final double MOTOR_VELOCITY_FILTER_ALPHA = 0.50;
 
     /**
@@ -141,7 +130,7 @@ public class turretSubsystem {
     /** Ready = vision error small for N frames AND turret physically settled. */
     public static final double AIM_TOLERANCE_DEG = 0.90;
     public static final int AIM_STABLE_FRAMES = 2;
-    public static final double READY_POSITION_TOL_TICKS = 7.0;
+    public static final double READY_POSITION_TOL_TICKS = 2.0;
     public static final double READY_MAX_VELOCITY_TPS = 60.0;
 
     /** Median window for tx (frames). 5 added ~2 frames of lag. */
@@ -155,19 +144,9 @@ public class turretSubsystem {
     public static boolean LATENCY_COMPENSATION_ENABLED = true;
 
     /**
-     * STAGE 2 (shoot-while-moving), default OFF until the log confirms the
-     * sign conventions: carries the setpoint between camera frames using
-     * Pinpoint motion, and feeds the target rate forward.
-     */
-    public static boolean ODOMETRY_FEEDFORWARD_ENABLED = false;
-
-    /**
-     * ODOMETRY + VISION FUSION. The target is stored as a point on the field,
-     * refined by every camera frame (using the odometry pose AT CAPTURE TIME)
-     * and aimed at from the live odometry pose EVERY loop. That removes camera
-     * latency/frame-rate from the setpoint while the robot moves or has just
-     * stopped. It ALWAYS runs in shadow mode (logged, not used) so a run proves
-     * the odometry before it is allowed to drive the turret.
+     * Store the observed hive as one field-space point. Vision corrects that
+     * point; odometry converts it back to a live robot-relative bearing every
+     * loop, including while the tag is hidden or the robot crosses the field.
      */
     public static boolean ODOMETRY_FUSION_ENABLED = true;
     /** How much of each new camera measurement is blended into the field target. */
@@ -189,8 +168,6 @@ public class turretSubsystem {
     public static final double FUSION_CONFIRM_MAX_GAP_MS = 200.0;
     /** Likewise, do not switch to the other hive cluster from one incorrect tag frame. */
     public static final int CLUSTER_SWITCH_CONFIRM_FRAMES = 3;
-    /** Fused target timeout when REMEMBER_TARGET_DURING_VISION_LOSS is disabled. */
-    public static final double FUSION_MAX_AGE_MS = 1500.0;
     private static final double FUSION_RATE_FILTER_ALPHA = 0.35;
     private static final double POSE_HISTORY_MS = 600.0;
     /**
@@ -220,29 +197,11 @@ public class turretSubsystem {
      */
     public static final int ODOMETRY_READ_EVERY_N_LOOPS = 2;
 
-    /** Motion prediction: tune flight time after basic stationary aiming works. */
-    public static boolean PREDICTION_ENABLED = true;
-    /** Keep RPM based on filtered measured range until range-rate prediction is proven. */
-    public static boolean DISTANCE_PREDICTION_ENABLED = false;
-    public static double FIXED_FLIGHT_TIME_S = 0.12;
-    public static double TOF_PER_INCH_S = 0.0055;
-    public static double FIXED_SHOT_DELAY_S = 0.06;
-    public static double MAX_PREDICTION_TIME_S = 1.20;
-    public static double MAX_ANGLE_LEAD_DEG = 12.0;
-    public static double MAX_DISTANCE_LEAD_IN = 36.0;
-
-    /** Odometry prediction settings. */
-    public static boolean USE_ODOMETRY_PREDICTION = true;
-    /** Keep the last field-coordinate target until a validated vision replacement is ready. */
-    public static boolean REMEMBER_TARGET_DURING_VISION_LOSS = true;
-    public static double ODOMETRY_RATE_BLEND = 0.70;
+    /** Odometry sign settings. */
     public static double ODOMETRY_FORWARD_SIGN = 1.0;
     public static double ODOMETRY_LEFT_SIGN = 1.0;
     public static double ODOMETRY_HEADING_SIGN = 1.0;
     public static double ODOMETRY_BEARING_SIGN = -1.0;
-    /** Dead-reckoning timeout when REMEMBER_TARGET_DURING_VISION_LOSS is disabled. */
-    public static double ODOMETRY_TARGET_HOLD_MS = 1000.0;
-
     // ========================= NORMAL CONSTANTS =========================
 
     private static final long MAX_RESULT_AGE_MS = 120;
@@ -262,15 +221,14 @@ public class turretSubsystem {
     private static final double STATIONARY_DISTANCE_OUTLIER_IN = 24.0;
     /** Even at full drive speed, a larger frame-to-frame jump is a bad edge-tag reading. */
     private static final double MOVING_DISTANCE_OUTLIER_IN = 40.0;
-    private static final double TARGET_RATE_FILTER_ALPHA = 0.10;
-    private static final double RANGE_RATE_FILTER_ALPHA = 0.25;
-    private static final double RATE_DEADBAND_DEG_PER_SEC = 4.0;
     private static final double MAX_TARGET_RATE_DEG_PER_SEC = 60.0;
-    private static final double MAX_RANGE_RATE_IN_PER_SEC = 140.0;
-    private static final double MAX_RATE_SAMPLE_GAP_MS = 180.0;
-    private static final double MIN_INTERCEPT_DENOMINATOR = 0.45;
     private static final double EXTRA_LATENCY_MS = 10.0;
     private static final double ENCODER_HISTORY_MS = 400.0;
+    // goBILDA RGB Indicator Light: white=manual/off, red=aligning, green=locked.
+    private static final double LED_MANUAL_POSITION = 1.000;
+    private static final double LED_ALIGNING_POSITION = 0.300;
+    private static final double LED_LOCKED_POSITION = 0.500;
+    private static final double LED_MIN_POSITION_CHANGE = 0.004;
 
     private final Hardware robot;
     private final DcMotorEx turretMotor;
@@ -298,41 +256,22 @@ public class turretSubsystem {
     private double filteredDistanceIn;
     private boolean distanceInitialized;
 
-    private double lastBearingDeg;
-    private double lastBearingTimeMs = -1;
-    private boolean bearingInitialized;
-    private double targetRateDegPerSec;
-    private double lastDistanceIn;
-    private double lastDistanceTimeMs = -1;
-    private boolean rangeRateInitialized;
-    private double rangeRateInPerSec;
-
     private double robotForwardVelocityInPerSec;
     private double robotLeftVelocityInPerSec;
     private double robotHeadingRateRadPerSec;
     private double robotFieldXIn;
     private double robotFieldYIn;
     private double robotFieldHeadingRad;
-    private double odometryTargetRateDegPerSec;
-    private double odometryRangeRateInPerSec;
     private double lastRobotBearingDeg = Double.NaN;
     private boolean odometryRateValid;
     private boolean odometryPoseValid;
 
-    /** Last vision target stored in Pinpoint field coordinates. */
-    private double odometryTargetFieldXIn;
-    private double odometryTargetFieldYIn;
-    private double odometryTrackedBearingDeg;
-    private double odometryTrackedDistanceIn;
-    private boolean odometryTargetInitialized;
+    /** True while a saved field-space hive is driving aim without live vision. */
     private boolean odometryTrackingActive;
 
     private boolean targetVisible;
     private boolean aimReady;
     private int stableAimFrames;
-    private double panLeadDeg;
-    private double impactDistanceIn;
-    private double predictionTimeS;
     private double lastVisionErrorDeg;
     private double lastLatencyMs;
 
@@ -370,7 +309,6 @@ public class turretSubsystem {
     private boolean fusValid;
     private double fusX, fusY;
     private int fusFrames;
-    private double fusLastFrameMs = -1;
     private double fusMeasX = Double.NaN, fusMeasY = Double.NaN;
     private double fusResidDeg = Double.NaN, fusResidIn = Double.NaN;
     private double fusBearingDeg = Double.NaN, fusDistanceIn = Double.NaN;
@@ -416,6 +354,7 @@ public class turretSubsystem {
     private double lastCurrentA = Double.NaN;
     private double lastSlowSampleMs = -1000;
     private double lastBatterySampleMs = -1000;
+    private double indicatorPosition = Double.NaN;
 
     public turretSubsystem(Hardware robot) {
         this.robot = robot;
@@ -425,6 +364,7 @@ public class turretSubsystem {
         robot.limelight.pipelineSwitch(APRILTAG_PIPELINE);
         robot.limelight.setPollRateHz(100);
         robot.limelight.start();
+        writeIndicatorPosition(LED_MANUAL_POSITION);
         clock.reset();
     }
 
@@ -458,7 +398,6 @@ public class turretSubsystem {
         targetVisible = false;
         targetTicksInitialized = false;
         fusValid = false;
-        odometryTargetInitialized = false;
         clearFusionPending();
         clearPendingCluster();
         resetMeasurementHistory(false);
@@ -518,9 +457,9 @@ public class turretSubsystem {
         saveEncoderSample(nowMs, currentTicks);
         newFrameThisLoop = false;
         updateVision(nowMs, currentTicks);
-        updateFusionPrediction(nowMs);
-        updateLostTargetFromOdometry(nowMs, currentTicks);
-        updateOdometryPredictionRates();
+        updateFusionPrediction();
+        odometryTrackingActive = !targetVisible && ODOMETRY_FUSION_ENABLED
+                && fusValid && odometryPoseValid && Double.isFinite(fusTargetTicks);
         long t2 = System.nanoTime();
 
         if (autoAimEnabled) {
@@ -529,6 +468,7 @@ public class turretSubsystem {
             applyManualControl(currentTicks);
         }
         updateReadyState(nowMs, currentTicks);
+        updateIndicator();
         emitTransitionEvents(nowMs, currentTicks);
         long t3 = System.nanoTime();
 
@@ -573,12 +513,14 @@ public class turretSubsystem {
      * is physically at its setpoint and nearly stationary.
      */
     private void updateReadyState(double nowMs, int currentTicks) {
-        boolean visionOk = targetVisible && stableAimFrames >= AIM_STABLE_FRAMES;
+        boolean targetKnown = targetVisible || odometryTrackingActive;
+        boolean sourceStable = odometryTrackingActive
+                || stableAimFrames >= AIM_STABLE_FRAMES;
         boolean settled = !autoAimEnabled
                 || (Math.abs(controlTargetTicks - currentTicks) <= READY_POSITION_TOL_TICKS
                     && Math.abs(filteredMotorVelocityTicksPerSecond) <= READY_MAX_VELOCITY_TPS);
         boolean wasReady = aimReady;
-        aimReady = visionOk && settled;
+        aimReady = targetKnown && sourceStable && settled;
         if (aimReady && !wasReady && autoAimEnabled) {
             if (autoAimOnMs >= 0 && Double.isNaN(readyAfterEnableMs)) {
                 readyAfterEnableMs = nowMs - autoAimOnMs;
@@ -700,6 +642,7 @@ public class turretSubsystem {
         r.put("tur_saturated", dbgSaturated);
         r.put("tur_current_a", lastCurrentA);
         r.put("batt_v", lastBatteryV);
+        r.put("tur_led_position", indicatorPosition);
 
         r.put("vis_visible", targetVisible);
         r.put("vis_tags", visibleTagCount);
@@ -722,7 +665,6 @@ public class turretSubsystem {
         r.put("vis_stable_frames", stableAimFrames);
         r.put("vis_geometry_ok", clusterGeometryValid);
         r.put("vis_dist_in", filteredDistanceIn);
-        r.put("vis_impact_dist_in", impactDistanceIn);
         r.put("vis_target_age_ms", Math.min(getTargetAgeMs(), 99999));
 
         r.put("aim_ready", aimReady);
@@ -764,15 +706,8 @@ public class turretSubsystem {
         r.put("odo_heading_rate", Math.toDegrees(robotHeadingRateRadPerSec));
         r.put("odo_speed", robotSpeedInPerSec);
         r.put("robot_stopped", robotStopped);
-        // For verifying sign conventions before enabling ODOMETRY_FEEDFORWARD_ENABLED:
-        // compare these two against d(bearing)/dt measured from vision.
-        r.put("odo_target_rate_dps", odometryTargetRateDegPerSec);
-        r.put("vis_target_rate_dps", targetRateDegPerSec);
-        r.put("odo_range_rate", odometryRangeRateInPerSec);
-        r.put("vis_range_rate", rangeRateInPerSec);
         r.put("bearing_deg", Double.isNaN(lastRobotBearingDeg) ? Double.NaN : lastRobotBearingDeg);
         r.put("odo_tracking", odometryTrackingActive);
-        r.put("pred_pan_lead_deg", panLeadDeg);
     }
 
     private void updateVision(double nowMs, int currentTicks) {
@@ -801,12 +736,8 @@ public class turretSubsystem {
             clusterGeometryValid = false;
             aimReady = false;
             stableAimFrames = 0;
-            targetRateDegPerSec *= 0.90;
-            panLeadDeg = 0;
             return;
         }
-
-        odometryTrackingActive = false;
 
         double frameTimestamp = resultTimestamp;
         if (frameTimestamp == lastFrameTimestamp) return;
@@ -843,13 +774,9 @@ public class turretSubsystem {
         dbgRawBearingDeg = bearingAtCaptureDeg;
         dbgCalibratedBearingDeg = calibratedBearingAtCaptureDeg;
         lastRobotBearingDeg = bearingAtCaptureDeg;
-        updateTargetRates(captureTimeMs, bearingAtCaptureDeg);
         double fusionDistanceIn = Double.isFinite(clusterAim.horizontalDistanceIn)
                 ? clusterAim.horizontalDistanceIn : filteredDistanceIn;
         updateFusionFromFrame(nowMs, captureTimeMs, bearingAtCaptureDeg, fusionDistanceIn);
-        saveTargetInFieldCoordinates(
-                bearingAtCaptureDeg, filteredDistanceIn, lastLatencyMs);
-        updatePrediction(lastLatencyMs);
 
         // Convert the raw target bearing into the calibrated shooter bearing. Expressing
         // the error against the CURRENT turret position also performs latency compensation:
@@ -857,20 +784,18 @@ public class turretSubsystem {
         double physicalTurretBearingNowDeg = currentTicks
                 / (AIM_DIRECTION_SIGN * TICKS_PER_DEGREE);
         lastVisionErrorDeg = calibratedBearingAtCaptureDeg
-                - physicalTurretBearingNowDeg + panLeadDeg;
+                - physicalTurretBearingNowDeg;
         stableAimFrames = Math.abs(lastVisionErrorDeg) <= AIM_TOLERANCE_DEG
                 ? stableAimFrames + 1 : 0;
 
-        if (autoAimEnabled) {
-            double measuredTargetTicks = currentTicks
-                    + AIM_DIRECTION_SIGN * lastVisionErrorDeg * TICKS_PER_DEGREE;
-            if (ODOMETRY_FEEDFORWARD_ENABLED && odometryRateValid) {
-                // The measurement describes the target as it was at capture time.
-                measuredTargetTicks += AIM_DIRECTION_SIGN * odometryTargetRateDegPerSec
-                        * (lastLatencyMs / 1000.0) * TICKS_PER_DEGREE;
-            }
-            dbgMeasuredTargetTicks = measuredTargetTicks;
-            fusMinusMeasTicks = Double.isNaN(fusTargetTicks) ? Double.NaN : fusTargetTicks - measuredTargetTicks;
+        boolean fieldTargetUsable = ODOMETRY_FUSION_ENABLED && fusValid
+                && odometryPoseValid && Double.isFinite(fusTargetTicks);
+        double measuredTargetTicks = currentTicks
+                + AIM_DIRECTION_SIGN * lastVisionErrorDeg * TICKS_PER_DEGREE;
+        dbgMeasuredTargetTicks = measuredTargetTicks;
+        fusMinusMeasTicks = Double.isNaN(fusTargetTicks)
+                ? Double.NaN : fusTargetTicks - measuredTargetTicks;
+        if (autoAimEnabled && !fieldTargetUsable) {
             if (!targetTicksInitialized) {
                 targetTicks = measuredTargetTicks;
                 targetTicksInitialized = true;
@@ -885,6 +810,8 @@ public class turretSubsystem {
                                 / (VISION_GAIN_FULL_ERROR_DEG * TICKS_PER_DEGREE), 0, 1);
                 targetTicks = (1.0 - dbgGain) * targetTicks + dbgGain * measuredTargetTicks;
             }
+        } else {
+            dbgGain = 0;
         }
     }
 
@@ -903,9 +830,6 @@ public class turretSubsystem {
         if (targetAgeBeforeFrameMs > HOLD_AFTER_TARGET_LOSS_MS) {
             distanceHistoryCount = 0;
             distanceInitialized = false;
-            rangeRateInitialized = false;
-            lastDistanceTimeMs = -1;
-            rangeRateInPerSec = 0;
         }
 
         // Reject a bad pose/vertical-angle result before it contaminates the median history.
@@ -924,50 +848,11 @@ public class turretSubsystem {
 
         if (!distanceInitialized) {
             filteredDistanceIn = medianDistance;
-            impactDistanceIn = medianDistance;
             distanceInitialized = true;
         } else {
             filteredDistanceIn += DISTANCE_FILTER_ALPHA
                     * (medianDistance - filteredDistanceIn);
         }
-    }
-
-    private void updateTargetRates(double captureTimeMs, double bearingDeg) {
-        if (bearingInitialized) {
-            double elapsedMs = captureTimeMs - lastBearingTimeMs;
-            if (elapsedMs > 1 && elapsedMs <= MAX_RATE_SAMPLE_GAP_MS) {
-                // Bearings are circular. Crossing +180/-180 is a small continued
-                // motion, not a roughly 360-degree jump that deserves maximum lead.
-                double measuredRate = clamp(
-                        wrapDeg(bearingDeg - lastBearingDeg) / (elapsedMs / 1000.0),
-                        -MAX_TARGET_RATE_DEG_PER_SEC, MAX_TARGET_RATE_DEG_PER_SEC);
-                if (Math.abs(measuredRate) < RATE_DEADBAND_DEG_PER_SEC) measuredRate = 0;
-                targetRateDegPerSec += TARGET_RATE_FILTER_ALPHA
-                        * (measuredRate - targetRateDegPerSec);
-            } else {
-                targetRateDegPerSec = 0;
-            }
-        }
-        lastBearingDeg = bearingDeg;
-        lastBearingTimeMs = captureTimeMs;
-        bearingInitialized = true;
-
-        if (!distanceInitialized) return;
-        if (rangeRateInitialized) {
-            double elapsedMs = captureTimeMs - lastDistanceTimeMs;
-            if (elapsedMs > 1 && elapsedMs <= MAX_RATE_SAMPLE_GAP_MS) {
-                double measuredRate = clamp(
-                        (filteredDistanceIn - lastDistanceIn) / (elapsedMs / 1000.0),
-                        -MAX_RANGE_RATE_IN_PER_SEC, MAX_RANGE_RATE_IN_PER_SEC);
-                rangeRateInPerSec += RANGE_RATE_FILTER_ALPHA
-                        * (measuredRate - rangeRateInPerSec);
-            } else {
-                rangeRateInPerSec = 0;
-            }
-        }
-        lastDistanceIn = filteredDistanceIn;
-        lastDistanceTimeMs = captureTimeMs;
-        rangeRateInitialized = true;
     }
 
     /** Reads and owns the odometry state used by turret prediction/tracking. */
@@ -1186,7 +1071,6 @@ public class turretSubsystem {
             event(String.format(java.util.Locale.US,
                     "FUSION_SEED field=(%.1f, %.1f) dist=%.1f", fusX, fusY, distIn));
         }
-        fusLastFrameMs = nowMs;
     }
 
     private void clearFusionPending() {
@@ -1197,12 +1081,7 @@ public class turretSubsystem {
     }
 
     /** Every loop: where should the turret point RIGHT NOW according to odometry. */
-    private void updateFusionPrediction(double nowMs) {
-        if (fusValid && !REMEMBER_TARGET_DURING_VISION_LOSS
-                && nowMs - fusLastFrameMs > FUSION_MAX_AGE_MS) {
-            fusValid = false;
-            event("FUSION_EXPIRED ageMs=" + (long) (nowMs - fusLastFrameMs));
-        }
+    private void updateFusionPrediction() {
         // A bad/stale Pinpoint sample must pause field tracking, not erase the
         // field point. Tracking resumes automatically when odometry recovers.
         if (!fusValid || !odometryPoseValid) {
@@ -1224,12 +1103,9 @@ public class turretSubsystem {
             return;
         }
         // A distance beyond MAX_DISTANCE_IN is not trustworthy for shooter RPM,
-        // but its field-point bearing is still useful for keeping the turret aimed
-        // while the tag is hidden. hasFusedDistance() applies the range limit.
-        // Keep master's shoot-on-the-move lead (panLeadDeg is 0 when PREDICTION_ENABLED is off or the target is lost).
-        fusTargetTicks = AIM_DIRECTION_SIGN * (calibratedAimBearingDeg(fusBearingDeg)
-                + (PREDICTION_ENABLED ? panLeadDeg : 0.0))
-                * TICKS_PER_DEGREE;
+        // but its field-point bearing still keeps the turret pointed at the hive.
+        fusTargetTicks = AIM_DIRECTION_SIGN
+                * calibratedAimBearingDeg(fusBearingDeg) * TICKS_PER_DEGREE;
 
         if (fusPrevBearingMs >= 0 && lastOdoReadMs > fusPrevBearingMs) {
             double dtS = (lastOdoReadMs - fusPrevBearingMs) / 1000.0;
@@ -1244,194 +1120,6 @@ public class turretSubsystem {
             fusPrevBearingMs = lastOdoReadMs;
         }
 
-        // Keep the lost-target anchor on the (better) fused point when fusion drives the turret.
-        if (ODOMETRY_FUSION_ENABLED) {
-            odometryTargetFieldXIn = fusX;
-            odometryTargetFieldYIn = fusY;
-            odometryTargetInitialized = true;
-        }
-    }
-
-    /** Converts the latest camera-relative target into Pinpoint field coordinates. */
-    private void saveTargetInFieldCoordinates(
-            double bearingAtCaptureDeg, double distanceAtCaptureIn, double latencyMs) {
-        if (!odometryPoseValid || !Double.isFinite(distanceAtCaptureIn)
-                || distanceAtCaptureIn < 1.0) {
-            return;
-        }
-
-        double mathBearingRad = Math.toRadians(
-                ODOMETRY_BEARING_SIGN * bearingAtCaptureDeg);
-        double relativeForwardIn = distanceAtCaptureIn * Math.cos(mathBearingRad);
-        double relativeLeftIn = distanceAtCaptureIn * Math.sin(mathBearingRad);
-
-        // Advance the capture-time measurement to approximately "now" using
-        // the current robot twist before anchoring it in the field frame.
-        if (odometryRateValid) {
-            double latencyS = clamp(latencyMs / 1000.0, 0, 0.25);
-            relativeForwardIn -= robotForwardVelocityInPerSec * latencyS;
-            relativeLeftIn -= robotLeftVelocityInPerSec * latencyS;
-            double headingChange = robotHeadingRateRadPerSec * latencyS;
-            double cosChange = Math.cos(headingChange);
-            double sinChange = Math.sin(headingChange);
-            double rotatedForward = cosChange * relativeForwardIn
-                    + sinChange * relativeLeftIn;
-            double rotatedLeft = -sinChange * relativeForwardIn
-                    + cosChange * relativeLeftIn;
-            relativeForwardIn = rotatedForward;
-            relativeLeftIn = rotatedLeft;
-        }
-
-        double cosHeading = Math.cos(robotFieldHeadingRad);
-        double sinHeading = Math.sin(robotFieldHeadingRad);
-        odometryTargetFieldXIn = robotFieldXIn
-                + relativeForwardIn * cosHeading - relativeLeftIn * sinHeading;
-        odometryTargetFieldYIn = robotFieldYIn
-                + relativeForwardIn * sinHeading + relativeLeftIn * cosHeading;
-        odometryTargetInitialized = true;
-    }
-
-    /** Uses the saved field point as the aim source while vision is occluded. */
-    private void updateLostTargetFromOdometry(double nowMs, int currentTicks) {
-        odometryTrackingActive = false;
-        if (targetVisible) return;
-
-        double targetAgeMs = lastTargetSeenMs < 0
-                ? Double.POSITIVE_INFINITY : nowMs - lastTargetSeenMs;
-        boolean canTrack = USE_ODOMETRY_PREDICTION
-                && odometryTargetInitialized
-                && odometryPoseValid
-                && (REMEMBER_TARGET_DURING_VISION_LOSS
-                        || targetAgeMs <= ODOMETRY_TARGET_HOLD_MS);
-
-        if (!canTrack) {
-            if (targetAgeMs > HOLD_AFTER_TARGET_LOSS_MS) {
-                selectedTagId = -1;
-                if (!REMEMBER_TARGET_DURING_VISION_LOSS) {
-                    resetMeasurementHistory(false);
-                }
-            }
-            return;
-        }
-
-        double fieldDeltaX = odometryTargetFieldXIn - robotFieldXIn;
-        double fieldDeltaY = odometryTargetFieldYIn - robotFieldYIn;
-        double cosHeading = Math.cos(robotFieldHeadingRad);
-        double sinHeading = Math.sin(robotFieldHeadingRad);
-        double relativeForwardIn = fieldDeltaX * cosHeading
-                + fieldDeltaY * sinHeading;
-        double relativeLeftIn = -fieldDeltaX * sinHeading
-                + fieldDeltaY * cosHeading;
-        double distanceIn = Math.hypot(relativeForwardIn, relativeLeftIn);
-        if (!Double.isFinite(distanceIn) || distanceIn < 1.0) {
-            // Keep the field point. It may become usable again as the robot
-            // returns to range or after a temporary odometry problem clears.
-            return;
-        }
-
-        double mathBearingDeg = Math.toDegrees(
-                Math.atan2(relativeLeftIn, relativeForwardIn));
-        double bearingDeg = ODOMETRY_BEARING_SIGN * mathBearingDeg;
-        odometryTrackedBearingDeg = bearingDeg;
-        odometryTrackedDistanceIn = distanceIn;
-        lastRobotBearingDeg = bearingDeg;
-        // Continue angular memory even if a drifting odometry position reports a
-        // range too large to trust for RPM selection.
-        if (distanceIn <= MAX_DISTANCE_IN) {
-            filteredDistanceIn = distanceIn;
-            impactDistanceIn = distanceIn;
-            distanceInitialized = true;
-        }
-        odometryTrackingActive = true;
-
-        double physicalTurretBearingDeg = currentTicks
-                / (AIM_DIRECTION_SIGN * TICKS_PER_DEGREE);
-        double calibratedBearingDeg = calibratedAimBearingDeg(bearingDeg);
-        lastVisionErrorDeg = calibratedBearingDeg - physicalTurretBearingDeg;
-        if (autoAimEnabled) {
-            targetTicks = AIM_DIRECTION_SIGN * calibratedBearingDeg * TICKS_PER_DEGREE;
-            targetTicksInitialized = true;
-        }
-    }
-
-    private void updateOdometryPredictionRates() {
-        if (!odometryRateValid || !distanceInitialized
-                || Double.isNaN(lastRobotBearingDeg)
-                || filteredDistanceIn < 1.0) {
-            return;
-        }
-
-        double bearingRad = Math.toRadians(
-                ODOMETRY_BEARING_SIGN * lastRobotBearingDeg);
-        double cosBearing = Math.cos(bearingRad);
-        double sinBearing = Math.sin(bearingRad);
-
-        double velocityTowardTarget = robotForwardVelocityInPerSec * cosBearing
-                + robotLeftVelocityInPerSec * sinBearing;
-        double velocityLeftOfTarget = -robotForwardVelocityInPerSec * sinBearing
-                + robotLeftVelocityInPerSec * cosBearing;
-
-        odometryRangeRateInPerSec = clamp(
-                -velocityTowardTarget,
-                -MAX_RANGE_RATE_IN_PER_SEC,
-                MAX_RANGE_RATE_IN_PER_SEC);
-
-        double mathBearingRateRadPerSec = -robotHeadingRateRadPerSec
-                - velocityLeftOfTarget / filteredDistanceIn;
-        odometryTargetRateDegPerSec = clamp(
-                ODOMETRY_BEARING_SIGN * Math.toDegrees(mathBearingRateRadPerSec),
-                -MAX_TARGET_RATE_DEG_PER_SEC,
-                MAX_TARGET_RATE_DEG_PER_SEC);
-    }
-
-    private double getPredictionTargetRateDegPerSec() {
-        if (!USE_ODOMETRY_PREDICTION || !odometryRateValid) {
-            return targetRateDegPerSec;
-        }
-        return (1.0 - ODOMETRY_RATE_BLEND) * targetRateDegPerSec
-                + ODOMETRY_RATE_BLEND * odometryTargetRateDegPerSec;
-    }
-
-    private double getPredictionRangeRateInPerSec() {
-        if (!USE_ODOMETRY_PREDICTION || !odometryRateValid) {
-            return rangeRateInPerSec;
-        }
-        return (1.0 - ODOMETRY_RATE_BLEND) * rangeRateInPerSec
-                + ODOMETRY_RATE_BLEND * odometryRangeRateInPerSec;
-    }
-
-    private void updatePrediction(double latencyMs) {
-        if (!distanceInitialized) return;
-        if (!PREDICTION_ENABLED) {
-            predictionTimeS = 0;
-            impactDistanceIn = filteredDistanceIn;
-            panLeadDeg = 0;
-            return;
-        }
-
-        double launchDelayS = FIXED_SHOT_DELAY_S + latencyMs / 1000.0;
-        // Noisy range rate caused large far-shot RPM swings. Pan prediction remains
-        // active; range lead is independently gated until its sign/filter are proven.
-        double predictionRangeRate = DISTANCE_PREDICTION_ENABLED && !robotStopped
-                ? getPredictionRangeRateInPerSec() : 0;
-        double denominator = Math.max(
-                1.0 - TOF_PER_INCH_S * predictionRangeRate,
-                MIN_INTERCEPT_DENOMINATOR);
-        predictionTimeS = clamp(
-                (launchDelayS + FIXED_FLIGHT_TIME_S
-                        + TOF_PER_INCH_S * filteredDistanceIn) / denominator,
-                0, MAX_PREDICTION_TIME_S);
-
-        impactDistanceIn = clamp(
-                filteredDistanceIn + clamp(
-                        predictionRangeRate * predictionTimeS,
-                        -MAX_DISTANCE_LEAD_IN, MAX_DISTANCE_LEAD_IN),
-                0, MAX_DISTANCE_IN);
-
-        double usefulRate = removeRateDeadband(getPredictionTargetRateDegPerSec());
-        panLeadDeg = clamp(
-                usefulRate * predictionTimeS,
-                -MAX_ANGLE_LEAD_DEG, MAX_ANGLE_LEAD_DEG);
     }
 
     private void applyAutomaticControl(double dt, double nowMs, int currentTicks) {
@@ -1449,34 +1137,19 @@ public class turretSubsystem {
             targetTicksInitialized = true;
             targetVelocityTicksPerSecond = robotStopped
                     ? 0 : AIM_DIRECTION_SIGN * fusRateDps * TICKS_PER_DEGREE;
-        } else if (odometryTrackingActive) {
-            targetVelocityTicksPerSecond = AIM_DIRECTION_SIGN
-                    * odometryTargetRateDegPerSec * TICKS_PER_DEGREE;
         } else if (targetAgeMs > HOLD_AFTER_TARGET_LOSS_MS) {
             targetVelocityTicksPerSecond = 0;
             integralPower = 0;
-            // If Pinpoint briefly drops out, hold the last remembered bearing
-            // instead of deliberately forgetting it and following the robot body.
-            if (!REMEMBER_TARGET_DURING_VISION_LOSS || !targetTicksInitialized) {
-                targetTicks = currentTicks;
-            }
-        } else if (ODOMETRY_FEEDFORWARD_ENABLED && odometryRateValid) {
-            targetVelocityTicksPerSecond = AIM_DIRECTION_SIGN
-                    * odometryTargetRateDegPerSec * TICKS_PER_DEGREE;
-            // Carry the setpoint between (slower) camera frames.
-            targetTicks += targetVelocityTicksPerSecond * dt;
-        } else if (PREDICTION_ENABLED) {
-            targetVelocityTicksPerSecond = AIM_DIRECTION_SIGN
-                    * removeRateDeadband(getPredictionTargetRateDegPerSec())
-                    * TICKS_PER_DEGREE;
+            // Hold the last setpoint if odometry briefly becomes unavailable.
+            // The saved field target remains intact and resumes when pose data returns.
         } else {
-            // Match System 1: prediction off means a stationary encoder setpoint.
             targetVelocityTicksPerSecond = 0;
         }
 
         dbgRequestedTargetTicks = targetTicks;
         controlTargetTicks = resolveTargetTicksWithinLimits(
-                dbgRequestedTargetTicks, currentTicks);
+                dbgRequestedTargetTicks, currentTicks,
+                targetVelocityTicksPerSecond);
         targetWrapped = isEquivalentRevolution(
                 dbgRequestedTargetTicks, controlTargetTicks)
                 && Math.abs(controlTargetTicks - dbgRequestedTargetTicks) > 1e-6;
@@ -1484,14 +1157,9 @@ public class turretSubsystem {
                 && Math.abs(controlTargetTicks - dbgRequestedTargetTicks) > 1e-6;
         if (targetClamped) targetVelocityTicksPerSecond = 0;
         double positionError = controlTargetTicks - currentTicks;
-        // Remove the accepted settle band from the error used by the controller.
-        // Without this, crossing 7.0 -> 7.1 ticks abruptly applies the full
-        // 7-tick P + stiction command (about 0.5 power), producing a visible kick.
-        double controlledPositionError = Math.copySign(
-                Math.max(0, Math.abs(positionError) - SETPOINT_DEADBAND_TICKS),
-                positionError);
-        double velocityError = targetVelocityTicksPerSecond
-                - filteredMotorVelocityTicksPerSecond;
+        // D damps turret motion only. Desired-motion feedforward is the separate
+        // kV term, so changing D during tuning cannot also add target velocity.
+        double velocityError = -filteredMotorVelocityTicksPerSecond;
 
         // Do not carry stored torque through the setpoint; that creates a
         // left-right limit cycle even when the vision target is steady.
@@ -1505,39 +1173,32 @@ public class turretSubsystem {
         dbgP = dbgD = dbgKV = dbgStiction = dbgRawPower = dbgDesiredPower = 0;
         dbgScale = 1;
         dbgSaturated = false;
-        if (Math.abs(positionError) <= SETPOINT_DEADBAND_TICKS
+        if (Math.abs(positionError) <= POSITION_TOLERANCE_TICKS
                 && Math.abs(targetVelocityTicksPerSecond) < 2.0) {
             appliedPower = 0;
             integralPower = 0;
         } else {
-            if (Math.abs(controlledPositionError) <= INTEGRAL_ZONE_TICKS) {
+            if (POSITION_KI > 0 && Math.abs(positionError) <= INTEGRAL_ZONE_TICKS) {
                 integralPower = clamp(
-                        integralPower + POSITION_KI * controlledPositionError * dt,
+                        integralPower + POSITION_KI * positionError * dt,
                         -MAX_INTEGRAL_POWER, MAX_INTEGRAL_POWER);
             } else {
                 integralPower = 0;
             }
-            double stiction = Math.copySign(
-                    STICTION_POWER * clamp(
-                            Math.abs(controlledPositionError) / STICTION_FADE_TICKS, 0, 1),
-                    controlledPositionError);
+            double staticFriction = STATIC_FRICTION_POWER == 0 ? 0
+                    : Math.copySign(STATIC_FRICTION_POWER, positionError);
             double controllerPower =
-                    POSITION_KP * controlledPositionError
+                    POSITION_KP * positionError
                             + VELOCITY_KD * velocityError
                             + VELOCITY_KV * targetVelocityTicksPerSecond
-                            + integralPower + stiction;
+                            + integralPower + staticFriction;
 
-            // Reduce every inner-loop term near the setpoint, as System 1 does.
-            double proximityScale = clamp(
-                    Math.abs(controlledPositionError) / FULL_POWER_ERROR_TICKS,
-                    MIN_PROXIMITY_POWER_SCALE, 1.0);
-            dbgP = POSITION_KP * controlledPositionError;
+            dbgP = POSITION_KP * positionError;
             dbgD = VELOCITY_KD * velocityError;
             dbgKV = VELOCITY_KV * targetVelocityTicksPerSecond;
-            dbgStiction = stiction;
-            dbgScale = proximityScale;
+            dbgStiction = staticFriction;
             dbgRawPower = controllerPower;
-            appliedPower = MOTOR_DIRECTION_SIGN * controllerPower * proximityScale;
+            appliedPower = MOTOR_DIRECTION_SIGN * controllerPower;
         }
         dbgI = integralPower;
         dbgDesiredPower = appliedPower;
@@ -1584,6 +1245,24 @@ public class turretSubsystem {
         }
     }
 
+    private void updateIndicator() {
+        double position = !autoAimEnabled
+                ? LED_MANUAL_POSITION
+                : aimReady ? LED_LOCKED_POSITION : LED_ALIGNING_POSITION;
+        writeIndicatorPosition(position);
+    }
+
+    private void writeIndicatorPosition(double position) {
+        if (robot.shooterLed.isPwmEnabled()
+                && Double.isFinite(indicatorPosition)
+                && Math.abs(position - indicatorPosition) < LED_MIN_POSITION_CHANGE) {
+            return;
+        }
+        indicatorPosition = position;
+        robot.shooterLed.setPosition(position);
+        robot.shooterLed.setPwmEnable();
+    }
+
     private double limitAtSoftStops(double power, int currentTicks) {
         double tickDirection = MOTOR_DIRECTION_SIGN * power;
         if (currentTicks >= MAX_TURRET_TICKS && tickDirection > 0) return 0;
@@ -1597,7 +1276,8 @@ public class turretSubsystem {
      * the appropriate stop until an equivalent angle becomes reachable.
      */
     static double resolveTargetTicksWithinLimits(
-            double requestedTicks, double currentTicks) {
+            double requestedTicks, double currentTicks,
+            double requestedVelocityTicksPerSecond) {
         if (!Double.isFinite(requestedTicks)) {
             return clampStatic(currentTicks, MIN_TURRET_TICKS, MAX_TURRET_TICKS);
         }
@@ -1627,6 +1307,15 @@ public class turretSubsystem {
                 }
             }
             return best;
+        }
+        // While the target moves through the unreachable rear sector, route
+        // toward the boundary where it will become reachable again. This starts
+        // a necessary wrap immediately instead of waiting until the sector midpoint.
+        if (requestedVelocityTicksPerSecond > WRAP_ROUTE_MIN_VELOCITY_TPS) {
+            return MIN_TURRET_TICKS;
+        }
+        if (requestedVelocityTicksPerSecond < -WRAP_ROUTE_MIN_VELOCITY_TPS) {
+            return MAX_TURRET_TICKS;
         }
         // The requested angle is in the physical blind sector. Choose the soft
         // stop that is closest in ANGLE, not the one closest numerically. Near
@@ -1892,9 +1581,7 @@ public class turretSubsystem {
             // has ever been visible. Multiple visible tags use their angular mean.
             centerTxDeg = Math.toDegrees(Math.atan(meanTanTx));
         }
-        return new ClusterAim(
-                centerTxDeg + GLOBAL_AIM_BIAS_DEG,
-                averageTyDeg, horizontalDistanceIn);
+        return new ClusterAim(centerTxDeg, averageTyDeg, horizontalDistanceIn);
     }
 
     private double estimateOpticalDepthFromTy(double targetYDegrees, int tagId) {
@@ -2016,37 +1703,23 @@ public class turretSubsystem {
         return sorted[sorted.length / 2];
     }
 
-    private double removeRateDeadband(double rate) {
-        return Math.abs(rate) > RATE_DEADBAND_DEG_PER_SEC
-                ? rate - Math.copySign(RATE_DEADBAND_DEG_PER_SEC, rate) : 0;
-    }
-
     private void resetMeasurementHistory(boolean preserveFieldTarget) {
         lastFrameTimestamp = -1;
         txHistoryCount = 0;
         distanceHistoryCount = 0;
         distanceInitialized = false;
-        bearingInitialized = false;
-        rangeRateInitialized = false;
-        lastBearingTimeMs = -1;
-        lastDistanceTimeMs = -1;
-        targetRateDegPerSec = 0;
-        rangeRateInPerSec = 0;
         lastRobotBearingDeg = Double.NaN;
-        if (!preserveFieldTarget) odometryTargetInitialized = false;
+        if (!preserveFieldTarget) fusValid = false;
         odometryTrackingActive = false;
-        odometryTrackedBearingDeg = 0;
-        odometryTrackedDistanceIn = 0;
         lastClusterTagPlaneDepthIn = Double.NaN;
         clusterGeometryValid = false;
-        panLeadDeg = 0;
         aimReady = false;
         stableAimFrames = 0;
     }
 
     public boolean hasTarget() { return targetVisible; }
     public boolean hasDistance() { return distanceInitialized; }
-    public boolean hasFieldTargetMemory() { return fusValid || odometryTargetInitialized; }
+    public boolean hasFieldTargetMemory() { return fusValid; }
     public boolean isAimReady() { return aimReady; }
     public int getSelectedTagId() { return selectedTagId; }
     public Alliance getAlliance() { return alliance; }
@@ -2066,7 +1739,6 @@ public class turretSubsystem {
     public boolean isClusterGeometryValid() { return clusterGeometryValid; }
     public double getFilteredTxDeg() { return filteredTxDeg; }
     public double getDistanceIn() { return filteredDistanceIn; }
-    public double getImpactDistanceIn() { return impactDistanceIn; }
     public boolean hasFusedDistance() {
         return ODOMETRY_FUSION_ENABLED && fusValid && odometryPoseValid
                 && Double.isFinite(fusDistanceIn)
@@ -2084,16 +1756,8 @@ public class turretSubsystem {
                     || Math.abs(fusDistanceIn - filteredDistanceIn) <= FUSION_REJECT_IN)) {
             return fusDistanceIn;
         }
-        return impactDistanceIn;
+        return filteredDistanceIn;
     }
-    public double getPanLeadDeg() { return panLeadDeg; }
-    /** Rate actually used by prediction after optional vision/odometry blending. */
-    public double getTargetRateDegPerSec() { return getPredictionTargetRateDegPerSec(); }
-    public double getRangeRateInPerSec() { return getPredictionRangeRateInPerSec(); }
-    public double getVisionTargetRateDegPerSec() { return targetRateDegPerSec; }
-    public double getVisionRangeRateInPerSec() { return rangeRateInPerSec; }
-    public double getOdometryTargetRateDegPerSec() { return odometryTargetRateDegPerSec; }
-    public double getOdometryRangeRateInPerSec() { return odometryRangeRateInPerSec; }
     public double getRobotForwardVelocityInPerSec() { return robotForwardVelocityInPerSec; }
     public double getRobotLeftVelocityInPerSec() { return robotLeftVelocityInPerSec; }
     public double getRobotHeadingRateDegPerSec() {
@@ -2102,13 +1766,12 @@ public class turretSubsystem {
     public boolean isOdometryRateValid() { return odometryRateValid; }
     public boolean isOdometryPoseValid() { return odometryPoseValid; }
     public boolean isOdometryTrackingActive() { return odometryTrackingActive; }
-    public double getOdometryTrackedBearingDeg() { return odometryTrackedBearingDeg; }
-    public double getOdometryTrackedDistanceIn() { return odometryTrackedDistanceIn; }
+    public double getOdometryTrackedBearingDeg() { return fusBearingDeg; }
+    public double getOdometryTrackedDistanceIn() { return fusDistanceIn; }
     public double getTargetAgeMs() {
         return lastTargetSeenMs < 0
                 ? Double.POSITIVE_INFINITY : clock.milliseconds() - lastTargetSeenMs;
     }
-    public double getPredictionTimeS() { return predictionTimeS; }
     public double getLastVisionErrorDeg() { return lastVisionErrorDeg; }
     public double getLastLatencyMs() { return lastLatencyMs; }
     public int getCurrentTicks() { return lastTicks; }
@@ -2135,6 +1798,7 @@ public class turretSubsystem {
         lastWrittenPower = 0;
         integralPower = 0;
         previousPositionErrorValid = false;
+        writeIndicatorPosition(LED_MANUAL_POSITION);
         robot.limelight.stop();
     }
 

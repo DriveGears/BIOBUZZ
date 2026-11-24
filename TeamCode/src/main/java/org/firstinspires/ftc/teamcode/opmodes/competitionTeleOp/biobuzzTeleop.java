@@ -237,7 +237,6 @@ public abstract class biobuzzTeleop extends LinearOpMode {
             telemetry.addData("CELL Roll", Double.isFinite(turret.getSelectedClusterRollDeg())
                     ? String.format("%.1f deg (UP)", turret.getSelectedClusterRollDeg())
                     : "no scorable CELL");
-            telemetry.addData("Prediction Lead", "%.2f deg", turret.getPanLeadDeg());
             double shooterDistanceIn = turret.getShooterDistanceIn();
             telemetry.addData("Shooter Range",
                     turret.hasDistance() && Double.isFinite(shooterDistanceIn)
@@ -332,11 +331,9 @@ public abstract class biobuzzTeleop extends LinearOpMode {
         packet.put("turret.selected_tag_id", turret.getSelectedTagId());
         packet.put("turret.cluster_first_id", turret.getSelectedClusterFirstId());
         putIfFinite(packet, "turret.distance_in", turret.getDistanceIn());
-        putIfFinite(packet, "turret.impact_distance_in", turret.getImpactDistanceIn());
         putIfFinite(packet, "turret.fused_distance_in", turret.getFusedDistanceIn());
         putIfFinite(packet, "turret.shooter_distance_in", turret.getShooterDistanceIn());
         packet.put("turret.fused_distance_valid", turret.hasFusedDistance() ? 1.0 : 0.0);
-        packet.put("turret.range_rate_in_s", turret.getRangeRateInPerSec());
         packet.put("turret.robot_speed_in_s", turret.getRobotSpeedInPerSec());
         packet.put("turret.geometry_valid", turret.isClusterGeometryValid() ? 1.0 : 0.0);
         putIfFinite(packet, "battery.volts", turret.getBatteryVolts());
@@ -363,5 +360,6 @@ public abstract class biobuzzTeleop extends LinearOpMode {
         telemetry.addLine("LB (tap): Toggle auto/manual (starts AUTO)");
         telemetry.addLine("D-pad L/R: Move turret while in manual mode");
         telemetry.addLine("Auto-aim moves turret only; right stick owns chassis turn");
+        telemetry.addLine("LED: white=manual, red=aligning, green=locked");
     }
 }

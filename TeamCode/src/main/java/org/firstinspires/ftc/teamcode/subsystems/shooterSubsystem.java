@@ -44,19 +44,6 @@ public class shooterSubsystem {
     public static final double INTEGRAL_ZONE_RPM = 60.0;
     private static final double MAX_INTEGRAL_SUM = 150.0;
 
-    // Full-range servo positions for goBILDA RGB Indicator Light 3118-0808-0002.
-    private static final double LED_IDLE_POSITION = 1.000;  // 2500 us, solid white standby
-    private static final double LED_RED_POSITION = 0.300;   // 1100 us
-    private static final double LED_GREEN_POSITION = 0.500; // 1500 us
-    /**
-     * While spinning, use the indicator's red-to-green hue range to show RPM error.
-     * Errors at or above this value are red; smaller errors progressively approach green.
-     */
-    public static final double LED_FULL_SCALE_ERROR_RPM = 1000.0;
-    /** Reserve the final green endpoint for the stable READY state. */
-    private static final double LED_SPIN_UP_MAX_CLOSENESS = 0.90;
-    private static final double LED_MIN_POSITION_CHANGE = 0.004;
-
     /** Maximum allowed request and how quickly the commanded RPM may change. */
     public static final double MAX_RPM = 3700.0;
     public static final double SPIN_UP_RPM_PER_SECOND = 15000.0;
@@ -92,15 +79,6 @@ public class shooterSubsystem {
     private double dTerm;
     private double fTerm;
     private double appliedPower;
-    private IndicatorState indicatorState;
-    private double indicatorPosition = Double.NaN;
-
-    private enum IndicatorState {
-        IDLE,
-        SPINNING_UP,
-        READY
-    }
-
     public shooterSubsystem(Hardware robot) {
         if (SHOT_DISTANCE_IN.length != SHOT_RPM.length || SHOT_DISTANCE_IN.length == 0) {
             throw new IllegalStateException("SHOT_DISTANCE_IN and SHOT_RPM must have equal lengths");
@@ -109,7 +87,6 @@ public class shooterSubsystem {
         this.robot = robot;
         robot.outtake.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
         stopFlywheel();
-        setIndicator(IndicatorState.IDLE);
     }
 
     public void setShooterEnabled(boolean enabled) {
@@ -121,9 +98,6 @@ public class shooterSubsystem {
             readyLoops = 0;
             atSpeed = false;
             stopFlywheel();
-            setIndicator(IndicatorState.IDLE);
-        } else {
-            setIndicator(IndicatorState.SPINNING_UP);
         }
     }
 
@@ -173,8 +147,6 @@ public class shooterSubsystem {
     /** Call once per OpMode loop. */
     public void update(double dtSeconds) {
         if (!enabled) {
-            // Reassert standby if another OpMode/device action disabled this servo channel.
-            setIndicator(IndicatorState.IDLE);
             return;
         }
 
@@ -232,11 +204,6 @@ public class shooterSubsystem {
             readyLoops = 0;
         }
         atSpeed = readyLoops >= READY_STABLE_LOOPS;
-        if (atSpeed) {
-            setIndicator(IndicatorState.READY);
-        } else {
-            setSpinUpIndicator(actualRpm);
-        }
     }
 
     public boolean isAtSpeed() {
@@ -327,7 +294,6 @@ public class shooterSubsystem {
         recorder.put("shoot_ki", kI);
         recorder.put("shoot_kd", kD);
         recorder.put("shoot_kf", kF);
-        recorder.put("shoot_led_position", indicatorPosition);
     }
 
     public void stop() {
@@ -336,7 +302,6 @@ public class shooterSubsystem {
         readyLoops = 0;
         atSpeed = false;
         stopFlywheel();
-        setIndicator(IndicatorState.IDLE);
     }
 
     private void stopFlywheel() {
@@ -372,46 +337,4 @@ public class shooterSubsystem {
         return Double.isFinite(value) ? Math.max(0, value) : 0;
     }
 
-    private void setIndicator(IndicatorState newState) {
-        indicatorState = newState;
-
-        double position;
-        switch (newState) {
-            case READY:
-                position = LED_GREEN_POSITION;
-                break;
-            case SPINNING_UP:
-                position = LED_RED_POSITION;
-                break;
-            default:
-                position = LED_IDLE_POSITION;
-                break;
-        }
-        writeIndicatorPosition(position);
-    }
-
-    /** Shows spin-up progress across a wide RPM range instead of only red/green. */
-    private void setSpinUpIndicator(double actualRpm) {
-        indicatorState = IndicatorState.SPINNING_UP;
-        double absoluteErrorRpm = Math.abs(targetRpm - actualRpm);
-        double closeness = 1.0 - clamp(
-                absoluteErrorRpm / LED_FULL_SCALE_ERROR_RPM, 0.0, 1.0);
-        closeness = Math.min(closeness, LED_SPIN_UP_MAX_CLOSENESS);
-        double position = LED_RED_POSITION
-                + closeness * (LED_GREEN_POSITION - LED_RED_POSITION);
-        writeIndicatorPosition(position);
-    }
-
-    private void writeIndicatorPosition(double position) {
-        if (robot.shooterLed.isPwmEnabled()
-                && Double.isFinite(indicatorPosition)
-                && Math.abs(position - indicatorPosition) < LED_MIN_POSITION_CHANGE) {
-            return;
-        }
-        indicatorPosition = position;
-        // Cache the intended pulse first, then enable PWM so the light cannot
-        // briefly start at the controller's default/off pulse width.
-        robot.shooterLed.setPosition(position);
-        robot.shooterLed.setPwmEnable();
-    }
 }
