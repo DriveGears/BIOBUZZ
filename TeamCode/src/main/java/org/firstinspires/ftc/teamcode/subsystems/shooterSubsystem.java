@@ -24,10 +24,10 @@ public class shooterSubsystem {
      * between these points approximates the curve without adding another tuning model.
      */
     public static final double[] SHOT_DISTANCE_IN = {
-            90, 100, 130, 160
+            60, 90, 100, 120, 160, 180
     };
     public static final double[] SHOT_RPM = {
-            2900, 3000, 3000, 3050
+            2900, 2950, 3000, 3000, 3050, 3075
     };
 
     // Competition PIDF defaults (RUN_WITHOUT_ENCODER motor mode).
@@ -43,6 +43,11 @@ public class shooterSubsystem {
     /** Integral only corrects small steady errors; it must not build during spin-up. */
     public static final double INTEGRAL_ZONE_RPM = 60.0;
     private static final double MAX_INTEGRAL_SUM = 150.0;
+
+    /** Extra torque only while the transfer is feeding and a shot has pulled RPM down. */
+    public static final double FEED_RECOVERY_POWER_BOOST = 0.05;
+    /** Avoid switching the boost on for ordinary encoder quantization near the setpoint. */
+    public static final double FEED_RECOVERY_MIN_ERROR_RPM = 75.0;
 
     /** Maximum allowed request and how quickly the commanded RPM may change. */
     public static final double MAX_RPM = 3700.0;
@@ -78,6 +83,7 @@ public class shooterSubsystem {
     private double iTerm;
     private double dTerm;
     private double fTerm;
+    private double recoveryBoostPower;
     private double appliedPower;
     public shooterSubsystem(Hardware robot) {
         if (SHOT_DISTANCE_IN.length != SHOT_RPM.length || SHOT_DISTANCE_IN.length == 0) {
@@ -191,7 +197,10 @@ public class shooterSubsystem {
         }
         iTerm = kI * integralSum;
 
-        double motorPower = pTerm + iTerm + dTerm + fTerm;
+        boolean transferFeeding = robot.transfer.getPower() > 0.05;
+        recoveryBoostPower = transferFeeding && errorRpm >= FEED_RECOVERY_MIN_ERROR_RPM
+                ? FEED_RECOVERY_POWER_BOOST : 0.0;
+        double motorPower = pTerm + iTerm + dTerm + fTerm + recoveryBoostPower;
         // A flywheel only needs forward power. Negative PID output would actively brake it.
         appliedPower = clamp(motorPower, 0.0, 1.0);
         robot.outtake.setPower(appliedPower);
@@ -271,6 +280,10 @@ public class shooterSubsystem {
         return fTerm;
     }
 
+    public double getRecoveryBoostPower() {
+        return recoveryBoostPower;
+    }
+
     public double getAppliedPower() {
         return appliedPower;
     }
@@ -290,6 +303,7 @@ public class shooterSubsystem {
         recorder.put("shoot_i", iTerm);
         recorder.put("shoot_d", dTerm);
         recorder.put("shoot_f", fTerm);
+        recorder.put("shoot_recovery_boost", recoveryBoostPower);
         recorder.put("shoot_kp", kP);
         recorder.put("shoot_ki", kI);
         recorder.put("shoot_kd", kD);
@@ -310,6 +324,7 @@ public class shooterSubsystem {
         iTerm = 0;
         dTerm = 0;
         fTerm = 0;
+        recoveryBoostPower = 0;
         appliedPower = 0;
         resetPID();
     }

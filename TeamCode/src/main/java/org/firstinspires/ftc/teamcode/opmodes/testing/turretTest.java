@@ -25,6 +25,9 @@ public class turretTest extends LinearOpMode {
     @Override
     public void runOpMode() {
         Hardware.resetInstance();
+        // Every test starts with the competition fusion path enabled. D-pad up
+        // can still toggle it during a run for a vision-only comparison.
+        turretSubsystem.ODOMETRY_FUSION_ENABLED = true;
         Hardware robot = Hardware.getInstance(hardwareMap);
         turretSubsystem turret = new turretSubsystem(robot);
         shooterSubsystem shooter = new shooterSubsystem(robot);
@@ -149,6 +152,9 @@ public class turretTest extends LinearOpMode {
                 telemetry.addData("Turret Tune", turretSubsystem.TUNE_VERSION);
                 telemetry.addData("Alliance / CELL", "%s / %s",
                         turret.getAlliance(), turret.getSelectedClusterName());
+                telemetry.addData("Side Aim", "camera=%+.1f shooter=%+.1f, offset=%+.1f in (%+.2f deg)",
+                        turret.getCameraSideOfClusterIn(), turret.getShooterSideOfClusterIn(),
+                        turret.getBankAimOffsetIn(), turret.getBankAimCorrectionDeg());
                 telemetry.addData("Target Visible", turret.hasTarget()
                         ? "YES (" + turret.getVisibleTagCount() + " tags: "
                           + turret.getVisibleTagIds() + ")"

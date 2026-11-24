@@ -194,6 +194,7 @@ public class ShooterRpmTester extends LinearOpMode {
                     packet.put("shooter.i_term", shooter.getITerm());
                     packet.put("shooter.d_term", shooter.getDTerm());
                     packet.put("shooter.f_term", shooter.getFTerm());
+                    packet.put("shooter.recovery_boost", shooter.getRecoveryBoostPower());
                     packet.put("shooter.ready", shooter.isAtSpeed() ? 1.0 : 0.0);
 
                     packet.put("transfer.target_rpm", targetTransferRpm);

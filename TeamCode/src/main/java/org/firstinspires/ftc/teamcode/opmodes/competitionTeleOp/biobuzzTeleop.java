@@ -237,6 +237,9 @@ public abstract class biobuzzTeleop extends LinearOpMode {
             telemetry.addData("CELL Roll", Double.isFinite(turret.getSelectedClusterRollDeg())
                     ? String.format("%.1f deg (UP)", turret.getSelectedClusterRollDeg())
                     : "no scorable CELL");
+            telemetry.addData("Side Aim", "camera=%+.1f shooter=%+.1f, offset=%+.1f in (%+.2f deg)",
+                    turret.getCameraSideOfClusterIn(), turret.getShooterSideOfClusterIn(),
+                    turret.getBankAimOffsetIn(), turret.getBankAimCorrectionDeg());
             double shooterDistanceIn = turret.getShooterDistanceIn();
             telemetry.addData("Shooter Range",
                     turret.hasDistance() && Double.isFinite(shooterDistanceIn)
@@ -306,6 +309,7 @@ public abstract class biobuzzTeleop extends LinearOpMode {
         packet.put("shooter.i_term", shooter.getITerm());
         packet.put("shooter.d_term", shooter.getDTerm());
         packet.put("shooter.f_term", shooter.getFTerm());
+        packet.put("shooter.recovery_boost", shooter.getRecoveryBoostPower());
         packet.put("shooter.ready", shooter.isAtSpeed() ? 1.0 : 0.0);
         putIfFinite(packet, "shooter.distance_bucket_in", shooter.getDistanceBucketIn());
         putIfFinite(packet, "shooter.current_a", outtakeCurrentAmps);

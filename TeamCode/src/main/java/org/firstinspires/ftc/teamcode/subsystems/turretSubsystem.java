@@ -8,6 +8,7 @@ import com.qualcomm.robotcore.util.ElapsedTime;
 
 import org.firstinspires.ftc.robotcore.external.navigation.AngleUnit;
 import org.firstinspires.ftc.robotcore.external.navigation.DistanceUnit;
+import org.firstinspires.ftc.robotcore.external.navigation.Position;
 import org.firstinspires.ftc.robotcore.external.navigation.UnnormalizedAngleUnit;
 import com.qualcomm.hardware.gobilda.GoBildaPinpointDriver;
 import org.firstinspires.ftc.teamcode.hardware.Hardware;
@@ -26,7 +27,7 @@ public class turretSubsystem {
     // ========================= VALUES TO CALIBRATE =========================
 
     /** Displayed by the test TeleOp so the deployed tuning profile is verifiable. */
-    public static final String TUNE_VERSION = "clean-v1-mechanical-reset";
+    public static final String TUNE_VERSION = "clean-v8-continuous-side-bank";
 
     /** Limelight AprilTag pipeline number. */
     public static final int APRILTAG_PIPELINE = 1;
@@ -47,7 +48,7 @@ public class turretSubsystem {
      * from robot-forward on both sides; camera-to-shooter parallax remains separate.
      * Keep at 1.0 until the turret PID and mechanics are verified.
      */
-    public static double AIM_ANGLE_SCALE = 1.0;
+    public static double AIM_ANGLE_SCALE = 1.05;
 
     /** Optional per-tag heights, in the same order. Empty uses DEFAULT_TAG_HEIGHT_IN. */
     public static final double[] TAG_HEIGHTS_IN = {};
@@ -64,7 +65,7 @@ public class turretSubsystem {
     /** Encoder safety limits. */
     public static final int MIN_TURRET_TICKS = -100;
     public static final int MAX_TURRET_TICKS = 400;
-    public static final double MAX_TURRET_POWER = 0.75;
+    public static final double MAX_TURRET_POWER = 0.85;
     /** Prevent a noisy blind-sector bearing from alternating between both soft stops. */
     public static final double BLIND_SECTOR_SWITCH_HYSTERESIS_DEG = 6.0;
     private static final double WRAP_ROUTE_MIN_VELOCITY_TPS = 5.0;
@@ -88,6 +89,17 @@ public class turretSubsystem {
     public static final double CAMERA_LEFT_OF_SHOOTER_IN = 3.5;
 
     /**
+     * Location-based bank aim. The known-good left shot is unchanged. Starting
+     * near the hive center, left correction grows continuously until the shooter
+     * is SIDE_AIM_FULL_RIGHT_IN to the right of the hive.
+     */
+    public static double RIGHT_POSITION_AIM_LEFT_IN = 14.0;
+    public static double SIDE_AIM_START_RIGHT_IN = 0.0;
+    public static double SIDE_AIM_FULL_RIGHT_IN = 8.0;
+    public static double SIDE_POSITION_FILTER_ALPHA = 0.25;
+    public static double BANK_AIM_FILTER_ALPHA = 0.25;
+
+    /**
      * Official BIOBUZZ tag X positions relative to the CELL opening. Camera-to-shooter
      * displacement is applied separately so its correction changes correctly with range.
      */
@@ -102,15 +114,24 @@ public class turretSubsystem {
      * Clean PID starting point for the rebuilt mechanism. These are deliberately
      * Dashboard-tunable and contain no friction-specific compensation yet.
      */
-    public static double POSITION_KP = 0.030;
+    public static double POSITION_KP = 0.040;
     public static double POSITION_KI = 0.0;
     public static double VELOCITY_KD = 0.0030;
     public static double VELOCITY_KV = 0.0;
-    public static double STATIC_FRICTION_POWER = 0.0;
+    /** Small breakaway assist for the rebuilt belt drive. */
+    public static double STATIC_FRICTION_POWER = 0.05;
     public static double MAX_INTEGRAL_POWER = 0.08;
     public static double INTEGRAL_ZONE_TICKS = 12.0;
     public static double POSITION_TOLERANCE_TICKS = 1.5;
     public static final double MOTOR_VELOCITY_FILTER_ALPHA = 0.50;
+    /**
+     * If the turret cannot move near the target, stop driving it instead of
+     * heating the motor indefinitely. A moved setpoint automatically retries.
+     */
+    public static double NEAR_TARGET_STALL_WINDOW_TICKS = 8.0;
+    public static double NEAR_TARGET_STALL_MAX_VELOCITY_TPS = 3.0;
+    public static double NEAR_TARGET_STALL_TIMEOUT_MS = 500.0;
+    public static double NEAR_TARGET_STALL_RETRY_DELTA_TICKS = 3.0;
 
     /**
      * Adaptive vision gain: big error -> trust the new frame almost fully
@@ -243,6 +264,11 @@ public class turretSubsystem {
     private Alliance alliance = Alliance.BLUE;
     private int selectedClusterFirstId = -1;
     private double selectedClusterRollDeg = Double.NaN;
+    private double cameraSideOfClusterIn = Double.NaN;
+    private double shooterSideOfClusterIn = Double.NaN;
+    private double bankAimOffsetIn;
+    /** Current angular correction applied after center-of-hive odometry fusion. */
+    private double bankAimCorrectionDeg;
     private String visibleTagIds = "none";
     private int visibleTagCount;
     private boolean clusterGeometryValid;
@@ -286,6 +312,9 @@ public class turretSubsystem {
     private double appliedPower;
     private double filteredMotorVelocityTicksPerSecond;
     private boolean motorVelocityInitialized;
+    private double nearTargetStallSinceMs = -1;
+    private double nearTargetStallSetpointTicks = Double.NaN;
+    private boolean nearTargetStallHolding;
 
     // ---- diagnostics (read by logTo / events)
     private FlightRecorder rec;
@@ -325,6 +354,8 @@ public class turretSubsystem {
     private double stopCandidateSinceMs = -1, moveCandidateSinceMs = -1;
     private boolean targetClamped;
     private boolean targetWrapped;
+    /** Selected soft-stop exit while the target is inside the unreachable rear sector. */
+    private double blindSectorRouteTicks = Double.NaN;
     private int pendingClusterFirstId = -1;
     private int pendingClusterFrames;
     private double pendingClusterLastFrameTimestamp = Double.NaN;
@@ -380,6 +411,8 @@ public class turretSubsystem {
         targetTicksInitialized = false;
         integralPower = 0;
         previousPositionErrorValid = false;
+        blindSectorRouteTicks = Double.NaN;
+        resetNearTargetStallSafety();
         stableAimFrames = 0;
         aimReady = false;
         resetMeasurementHistory(true);
@@ -394,10 +427,13 @@ public class turretSubsystem {
         this.alliance = alliance;
         selectedClusterFirstId = -1;
         selectedClusterRollDeg = Double.NaN;
+        resetSideAim();
         selectedTagId = -1;
         targetVisible = false;
         targetTicksInitialized = false;
         fusValid = false;
+        blindSectorRouteTicks = Double.NaN;
+        resetNearTargetStallSafety();
         clearFusionPending();
         clearPendingCluster();
         resetMeasurementHistory(false);
@@ -427,6 +463,8 @@ public class turretSubsystem {
         targetTicksInitialized = false;
         integralPower = 0;
         previousPositionErrorValid = false;
+        blindSectorRouteTicks = Double.NaN;
+        resetNearTargetStallSafety();
         appliedPower = 0;
         manualPower = 0;
         encoderHistory.clear();
@@ -636,6 +674,7 @@ public class turretSubsystem {
         r.put("tur_kv", dbgKV);
         r.put("tur_i", dbgI);
         r.put("tur_stiction", dbgStiction);
+        r.put("tur_near_stall_hold", nearTargetStallHolding);
         r.put("tur_prox_scale", dbgScale);
         r.put("tur_raw_power", dbgRawPower);
         r.put("tur_desired_power", dbgDesiredPower);
@@ -662,6 +701,10 @@ public class turretSubsystem {
         r.put("vis_measured_target_ticks", dbgMeasuredTargetTicks);
         r.put("aim_raw_bearing_deg", dbgRawBearingDeg);
         r.put("aim_calibrated_bearing_deg", dbgCalibratedBearingDeg);
+        r.put("aim_camera_side_in", cameraSideOfClusterIn);
+        r.put("aim_shooter_side_in", shooterSideOfClusterIn);
+        r.put("aim_bank_offset_in", bankAimOffsetIn);
+        r.put("aim_bank_correction_deg", bankAimCorrectionDeg);
         r.put("vis_stable_frames", stableAimFrames);
         r.put("vis_geometry_ok", clusterGeometryValid);
         r.put("vis_dist_in", filteredDistanceIn);
@@ -770,12 +813,16 @@ public class turretSubsystem {
         // Robot-relative bearing = camera error + physical turret bearing.
         double bearingAtCaptureDeg = horizontalErrorDeg
                 + ticksAtCapture / (AIM_DIRECTION_SIGN * TICKS_PER_DEGREE);
-        double calibratedBearingAtCaptureDeg = calibratedAimBearingDeg(bearingAtCaptureDeg);
+        double fusionDistanceIn = Double.isFinite(clusterAim.horizontalDistanceIn)
+                ? clusterAim.horizontalDistanceIn : filteredDistanceIn;
+        bankAimCorrectionDeg = bankAimCorrectionForDistance(fusionDistanceIn);
+        double calibratedBearingAtCaptureDeg = calibratedAimBearingDeg(bearingAtCaptureDeg)
+                + bankAimCorrectionDeg;
         dbgRawBearingDeg = bearingAtCaptureDeg;
         dbgCalibratedBearingDeg = calibratedBearingAtCaptureDeg;
         lastRobotBearingDeg = bearingAtCaptureDeg;
-        double fusionDistanceIn = Double.isFinite(clusterAim.horizontalDistanceIn)
-                ? clusterAim.horizontalDistanceIn : filteredDistanceIn;
+        // Fusion must remember the physical hive center, not whichever edge is
+        // currently selected for the shot. The edge correction is added later.
         updateFusionFromFrame(nowMs, captureTimeMs, bearingAtCaptureDeg, fusionDistanceIn);
 
         // Convert the raw target bearing into the calibrated shooter bearing. Expressing
@@ -1104,8 +1151,10 @@ public class turretSubsystem {
         }
         // A distance beyond MAX_DISTANCE_IN is not trustworthy for shooter RPM,
         // but its field-point bearing still keeps the turret pointed at the hive.
+        bankAimCorrectionDeg = bankAimCorrectionForDistance(fusDistanceIn);
         fusTargetTicks = AIM_DIRECTION_SIGN
-                * calibratedAimBearingDeg(fusBearingDeg) * TICKS_PER_DEGREE;
+                * (calibratedAimBearingDeg(fusBearingDeg) + bankAimCorrectionDeg)
+                * TICKS_PER_DEGREE;
 
         if (fusPrevBearingMs >= 0 && lastOdoReadMs > fusPrevBearingMs) {
             double dtS = (lastOdoReadMs - fusPrevBearingMs) / 1000.0;
@@ -1173,8 +1222,10 @@ public class turretSubsystem {
         dbgP = dbgD = dbgKV = dbgStiction = dbgRawPower = dbgDesiredPower = 0;
         dbgScale = 1;
         dbgSaturated = false;
-        if (Math.abs(positionError) <= POSITION_TOLERANCE_TICKS
-                && Math.abs(targetVelocityTicksPerSecond) < 2.0) {
+        boolean stallSafetyHolding = updateNearTargetStallSafety(positionError, nowMs);
+        if ((Math.abs(positionError) <= POSITION_TOLERANCE_TICKS
+                && Math.abs(targetVelocityTicksPerSecond) < 2.0)
+                || stallSafetyHolding) {
             appliedPower = 0;
             integralPower = 0;
         } else {
@@ -1208,6 +1259,55 @@ public class turretSubsystem {
         writePower(appliedPower);
     }
 
+    /** Stops a near-target mechanical stall, but retries when the requested aim moves. */
+    private boolean updateNearTargetStallSafety(double positionError, double nowMs) {
+        double absError = Math.abs(positionError);
+        if (nearTargetStallHolding) {
+            boolean setpointMoved = Math.abs(
+                    controlTargetTicks - nearTargetStallSetpointTicks)
+                    >= NEAR_TARGET_STALL_RETRY_DELTA_TICKS;
+            if (!setpointMoved && absError > POSITION_TOLERANCE_TICKS
+                    && absError <= NEAR_TARGET_STALL_WINDOW_TICKS) {
+                return true;
+            }
+            resetNearTargetStallSafety();
+        }
+
+        boolean nearlyStalled = absError > POSITION_TOLERANCE_TICKS
+                && absError <= NEAR_TARGET_STALL_WINDOW_TICKS
+                && Math.abs(targetVelocityTicksPerSecond) < 2.0
+                && Math.abs(filteredMotorVelocityTicksPerSecond)
+                        <= NEAR_TARGET_STALL_MAX_VELOCITY_TPS;
+        if (!nearlyStalled) {
+            nearTargetStallSinceMs = -1;
+            nearTargetStallSetpointTicks = Double.NaN;
+            return false;
+        }
+        if (nearTargetStallSinceMs < 0
+                || Math.abs(controlTargetTicks - nearTargetStallSetpointTicks)
+                        >= NEAR_TARGET_STALL_RETRY_DELTA_TICKS) {
+            nearTargetStallSinceMs = nowMs;
+            nearTargetStallSetpointTicks = controlTargetTicks;
+            return false;
+        }
+        if (nowMs - nearTargetStallSinceMs < NEAR_TARGET_STALL_TIMEOUT_MS) {
+            return false;
+        }
+
+        nearTargetStallHolding = true;
+        integralPower = 0;
+        event(String.format(java.util.Locale.US,
+                "NEAR_TARGET_STALL_HOLD error=%+.1f target=%.1f ticks=%d",
+                positionError, controlTargetTicks, lastTicks));
+        return true;
+    }
+
+    private void resetNearTargetStallSafety() {
+        nearTargetStallSinceMs = -1;
+        nearTargetStallSetpointTicks = Double.NaN;
+        nearTargetStallHolding = false;
+    }
+
     private void updateFilteredMotorVelocity() {
         double rawVelocity = turretMotor.getVelocity();
         rawMotorVelocityTps = rawVelocity;
@@ -1224,6 +1324,8 @@ public class turretSubsystem {
         targetTicksInitialized = false;
         integralPower = 0;
         previousPositionErrorValid = false;
+        blindSectorRouteTicks = Double.NaN;
+        resetNearTargetStallSafety();
         dbgP = dbgD = dbgKV = dbgStiction = dbgRawPower = dbgI = 0;
         dbgDesiredPower = manualPower;
         dbgScale = 1;
@@ -1275,19 +1377,22 @@ public class turretSubsystem {
      * the physical soft stops. If the angle is in the blind sector, returns
      * the appropriate stop until an equivalent angle becomes reachable.
      */
-    static double resolveTargetTicksWithinLimits(
+    private double resolveTargetTicksWithinLimits(
             double requestedTicks, double currentTicks,
             double requestedVelocityTicksPerSecond) {
         if (!Double.isFinite(requestedTicks)) {
+            blindSectorRouteTicks = Double.NaN;
             return clampStatic(currentTicks, MIN_TURRET_TICKS, MAX_TURRET_TICKS);
         }
         if (requestedTicks >= MIN_TURRET_TICKS
                 && requestedTicks <= MAX_TURRET_TICKS) {
+            blindSectorRouteTicks = Double.NaN;
             return requestedTicks;
         }
 
         double revolution = Math.abs(TURRET_TICKS_PER_REVOLUTION);
         if (revolution < 1e-6) {
+            blindSectorRouteTicks = Double.NaN;
             return clampStatic(requestedTicks, MIN_TURRET_TICKS, MAX_TURRET_TICKS);
         }
 
@@ -1296,6 +1401,7 @@ public class turretSubsystem {
         long lastTurn = (long) Math.floor(
                 (MAX_TURRET_TICKS - requestedTicks) / revolution);
         if (firstTurn <= lastTurn) {
+            blindSectorRouteTicks = Double.NaN;
             double best = requestedTicks + firstTurn * revolution;
             double bestTravel = Math.abs(best - currentTicks);
             for (long turn = firstTurn + 1; turn <= lastTurn; turn++) {
@@ -1308,14 +1414,24 @@ public class turretSubsystem {
             }
             return best;
         }
+        // Once a route through the unreachable rear sector is selected, keep
+        // that route until an equivalent target is physically reachable again.
+        // Without this latch, the filtered target rate can cross the routing
+        // threshold and make the command flip rapidly between both soft stops.
+        if (blindSectorRouteTicks == MIN_TURRET_TICKS
+                || blindSectorRouteTicks == MAX_TURRET_TICKS) {
+            return blindSectorRouteTicks;
+        }
         // While the target moves through the unreachable rear sector, route
         // toward the boundary where it will become reachable again. This starts
         // a necessary wrap immediately instead of waiting until the sector midpoint.
         if (requestedVelocityTicksPerSecond > WRAP_ROUTE_MIN_VELOCITY_TPS) {
-            return MIN_TURRET_TICKS;
+            blindSectorRouteTicks = MIN_TURRET_TICKS;
+            return blindSectorRouteTicks;
         }
         if (requestedVelocityTicksPerSecond < -WRAP_ROUTE_MIN_VELOCITY_TPS) {
-            return MAX_TURRET_TICKS;
+            blindSectorRouteTicks = MAX_TURRET_TICKS;
+            return blindSectorRouteTicks;
         }
         // The requested angle is in the physical blind sector. Choose the soft
         // stop that is closest in ANGLE, not the one closest numerically. Near
@@ -1328,12 +1444,14 @@ public class turretSubsystem {
         double switchHysteresisTicks = BLIND_SECTOR_SWITCH_HYSTERESIS_DEG
                 * TICKS_PER_DEGREE;
         if (Math.abs(distanceToMin - distanceToMax) <= switchHysteresisTicks) {
-            return Math.abs(currentTicks - MIN_TURRET_TICKS)
+            blindSectorRouteTicks = Math.abs(currentTicks - MIN_TURRET_TICKS)
                     <= Math.abs(currentTicks - MAX_TURRET_TICKS)
                             ? MIN_TURRET_TICKS : MAX_TURRET_TICKS;
+            return blindSectorRouteTicks;
         }
-        return distanceToMin < distanceToMax
+        blindSectorRouteTicks = distanceToMin < distanceToMax
                 ? MIN_TURRET_TICKS : MAX_TURRET_TICKS;
+        return blindSectorRouteTicks;
     }
 
     private static double equivalentTickDistance(
@@ -1399,6 +1517,7 @@ public class turretSubsystem {
                 return empty;
             }
             selectedClusterFirstId = selected.firstId;
+            resetSideAim();
             targetTicksInitialized = false;
             // Keep the previous field point until updateFusionFromFrame accepts
             // a consistent replacement. Clearing it here made the turret forget
@@ -1487,6 +1606,8 @@ public class turretSubsystem {
         int count = tags.size();
         double sumTanTx = 0;
         double sumTy = 0;
+
+        updateSideAim(tags);
 
         for (LLResultTypes.FiducialResult tag : tags) {
             double correctedTxDeg = tag.getTargetXDegrees()
@@ -1582,6 +1703,63 @@ public class turretSubsystem {
             centerTxDeg = Math.toDegrees(Math.atan(meanTanTx));
         }
         return new ClusterAim(centerTxDeg, averageTyDeg, horizontalDistanceIn);
+    }
+
+    /** Converts the selected lateral edge into an angle without moving the saved hive. */
+    private double bankAimCorrectionForDistance(double distanceIn) {
+        if (!Double.isFinite(distanceIn) || distanceIn < 1.0) return 0;
+        return Math.toDegrees(Math.atan2(bankAimOffsetIn, distanceIn));
+    }
+
+    /**
+     * Locates the camera left/right of the complete four-tag cluster. Each pose
+     * is relative to one tag, so adding that tag's cluster X offset produces a
+     * common opening-centered coordinate before the observations are averaged.
+     */
+    private void updateSideAim(List<LLResultTypes.FiducialResult> tags) {
+        double cameraClusterXSumIn = 0;
+        int samples = 0;
+        for (LLResultTypes.FiducialResult tag : tags) {
+            if (tag.getCameraPoseTargetSpace() == null
+                    || tag.getCameraPoseTargetSpace().getPosition() == null) continue;
+            Position cameraPosition = tag.getCameraPoseTargetSpace().getPosition();
+            double cameraXIn = DistanceUnit.INCH.fromUnit(
+                    cameraPosition.unit, cameraPosition.x);
+            if (!Double.isFinite(cameraXIn)) continue;
+            cameraClusterXSumIn += cameraXIn + clusterXForTag(tag.getFiducialId());
+            samples++;
+        }
+        if (samples == 0) return;
+
+        double measuredSideIn = cameraClusterXSumIn / samples;
+        if (!Double.isFinite(cameraSideOfClusterIn)) {
+            cameraSideOfClusterIn = measuredSideIn;
+        } else {
+            cameraSideOfClusterIn += SIDE_POSITION_FILTER_ALPHA
+                    * (measuredSideIn - cameraSideOfClusterIn);
+        }
+
+        // The Limelight is left of the shooter, so convert the camera's
+        // target-space position into the shooter's position before deciding
+        // which side/edge should be used.
+        shooterSideOfClusterIn = cameraSideOfClusterIn + CAMERA_LEFT_OF_SHOOTER_IN;
+
+        double rightSideFraction = clamp(
+                (shooterSideOfClusterIn - SIDE_AIM_START_RIGHT_IN)
+                        / Math.max(0.1,
+                                SIDE_AIM_FULL_RIGHT_IN - SIDE_AIM_START_RIGHT_IN),
+                0, 1);
+        double requestedBankOffsetIn = -RIGHT_POSITION_AIM_LEFT_IN
+                * rightSideFraction;
+        bankAimOffsetIn += BANK_AIM_FILTER_ALPHA
+                * (requestedBankOffsetIn - bankAimOffsetIn);
+    }
+
+    private void resetSideAim() {
+        cameraSideOfClusterIn = Double.NaN;
+        shooterSideOfClusterIn = Double.NaN;
+        bankAimOffsetIn = 0;
+        bankAimCorrectionDeg = 0;
     }
 
     private double estimateOpticalDepthFromTy(double targetYDegrees, int tagId) {
@@ -1725,6 +1903,10 @@ public class turretSubsystem {
     public Alliance getAlliance() { return alliance; }
     public int getSelectedClusterFirstId() { return selectedClusterFirstId; }
     public double getSelectedClusterRollDeg() { return selectedClusterRollDeg; }
+    public double getCameraSideOfClusterIn() { return cameraSideOfClusterIn; }
+    public double getShooterSideOfClusterIn() { return shooterSideOfClusterIn; }
+    public double getBankAimOffsetIn() { return bankAimOffsetIn; }
+    public double getBankAimCorrectionDeg() { return bankAimCorrectionDeg; }
     public String getSelectedClusterName() {
         switch (selectedClusterFirstId) {
             case RED_SCORING_CLUSTER_FIRST_ID: return "RED SCORING";
@@ -1798,6 +1980,8 @@ public class turretSubsystem {
         lastWrittenPower = 0;
         integralPower = 0;
         previousPositionErrorValid = false;
+        blindSectorRouteTicks = Double.NaN;
+        resetNearTargetStallSafety();
         writeIndicatorPosition(LED_MANUAL_POSITION);
         robot.limelight.stop();
     }
