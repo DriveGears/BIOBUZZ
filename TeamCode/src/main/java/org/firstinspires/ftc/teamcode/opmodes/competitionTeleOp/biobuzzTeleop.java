@@ -103,177 +103,177 @@ public abstract class biobuzzTeleop extends LinearOpMode {
         lastLeftBumper = gamepad1.left_bumper;
 
         try {
-        while (opModeIsActive()) {
-            robot.beginLoop();
-            double dtSeconds = loopTimer.seconds();
-            loopTimer.reset();
+            while (opModeIsActive()) {
+                robot.beginLoop();
+                double dtSeconds = loopTimer.seconds();
+                loopTimer.reset();
 
-            double forward = -applyDeadband(gamepad1.left_stick_y);
-            double lateral = applyDeadband(gamepad1.left_stick_x);
-            double turn = applyDeadband(gamepad1.right_stick_x);
+                double forward = -applyDeadband(gamepad1.left_stick_y);
+                double lateral = applyDeadband(gamepad1.left_stick_x);
+                double turn = applyDeadband(gamepad1.right_stick_x);
 
-            boolean currentRightTrigger = gamepad1.right_trigger > 0.5;
-            if (currentRightTrigger && !lastRightTrigger) {
-                intakeToggle = !intakeToggle;
+                boolean currentRightTrigger = gamepad1.right_trigger > 0.5;
+                if (currentRightTrigger && !lastRightTrigger) {
+                    intakeToggle = !intakeToggle;
+                }
+                lastRightTrigger = currentRightTrigger;
+
+                boolean currentLeftTrigger = gamepad1.left_trigger > 0.5;
+                if (currentLeftTrigger && !lastLeftTrigger) {
+                    outtakeToggle = !outtakeToggle;
+                }
+                lastLeftTrigger = currentLeftTrigger;
+
+                boolean spit = gamepad1.right_bumper;
+
+                if (spit) {
+                    robot.intake.setPower(-INTAKE_POWER);
+                } else {
+                    robot.intake.setPower(intakeToggle ? INTAKE_POWER : 0.0);
+                }
+
+                if (turret.hasDistance()) {
+                    shooter.setTargetForDistance(turret.getShooterDistanceIn());
+                } else {
+                    shooter.setTargetRpm(shooterSubsystem.COMPETITION_RPM);
+                }
+                shooter.setShooterEnabled(outtakeToggle);
+                shooter.update(dtSeconds);
+
+                boolean transferRequested = gamepad1.a;
+                boolean transferReverse = gamepad1.x;
+
+                // Auto-aim starts enabled. Tap LB to switch to/from manual aiming.
+                boolean currentLeftBumper = gamepad1.left_bumper;
+                if (currentLeftBumper && !lastLeftBumper) {
+                    autoAimEnabled = !autoAimEnabled;
+                }
+                lastLeftBumper = currentLeftBumper;
+                turret.setAutoAimEnabled(autoAimEnabled);
+
+                double manualTurretCommand = (gamepad1.dpad_right ? 1.0 : 0.0)
+                        - (gamepad1.dpad_left ? 1.0 : 0.0);
+                turret.setManualPower(manualTurretCommand * MANUAL_TURRET_POWER);
+                turret.update(dtSeconds);
+
+                // Keep readiness as telemetry for the driver/log, but A always owns
+                // forward transfer directly. The driver decides when to release a shot.
+                boolean shotReady = shooter.isAtSpeed()
+                        && (!autoAimEnabled || turret.isAimReady());
+                boolean transferFeeding = transferRequested;
+                if (transferFeeding) {
+                    robot.transfer.setPower(TRANSFER_POWER);
+                } else if (transferReverse) {
+                    robot.transfer.setPower(-TRANSFER_POWER);
+                } else {
+                    robot.transfer.setPower(0);
+                }
+
+                if (outtakeCurrentTimer.seconds() >= OUTTAKE_CURRENT_SAMPLE_SECONDS) {
+                    outtakeCurrentTimer.reset();
+                    try {
+                        outtakeCurrentAmps = robot.readOuttakeCurrentAmps();
+                    } catch (Throwable ignored) { }
+                }
+
+                double transferCommand = transferFeeding ? TRANSFER_POWER
+                        : transferReverse ? -TRANSFER_POWER : 0.0;
+                double transferRpm = robot.transfer.getVelocity() * 60.0
+                        / TRANSFER_TICKS_PER_REVOLUTION;
+
+                // Auto-aim moves only the turret. Chassis rotation is always the
+                // driver's right-stick command.
+                double driveTurn = turn;
+
+                double denominator = Math.max(
+                        Math.abs(forward) + Math.abs(lateral) + Math.abs(driveTurn), 1.0);
+                robot.lf.setPower((forward + lateral + driveTurn) / denominator);
+                robot.lb.setPower((forward - lateral + driveTurn) / denominator);
+                robot.rf.setPower((forward - lateral - driveTurn) / denominator);
+                robot.rb.setPower((forward + lateral - driveTurn) / denominator);
+
+                // ---- flight recorder row ----
+                turret.logTo(rec);
+                rec.put("op_dt_ms", dtSeconds * 1000.0);
+                rec.put("in_forward", forward);
+                rec.put("in_lateral", lateral);
+                rec.put("in_turn", turn);
+                rec.put("in_autoaim", autoAimEnabled);
+                rec.put("in_dpad_manual", manualTurretCommand);
+                rec.put("in_intake_on", intakeToggle);
+                rec.put("in_outtake_on", outtakeToggle);
+                rec.put("in_transfer_requested", transferRequested);
+                rec.put("shot_ready", shotReady);
+                rec.put("in_transfer_command", transferCommand);
+                rec.put("transfer_actual_rpm", transferRpm);
+                rec.put("shoot_current_a", outtakeCurrentAmps);
+                shooter.logTo(rec);
+                rec.endRow();
+
+                sendDashboardTelemetry(
+                        dtSeconds, transferRequested, shotReady,
+                        transferCommand, transferRpm);
+
+                telemetry.addData("Turret Mode", autoAimEnabled ? "AUTO-AIM" : "MANUAL");
+                telemetry.addData("Target Visible", turret.hasTarget()
+                        ? "YES (ID: " + turret.getSelectedTagId() + ")"
+                        : turret.isOdometryTrackingActive()
+                          ? "ODOMETRY MEMORY" : "NO");
+                telemetry.addData("Hive Field Memory",
+                        !turret.hasFieldTargetMemory() ? "EMPTY"
+                                : turret.isOdometryPoseValid()
+                                  ? "SAVED / TRACKING"
+                                  : "SAVED / ODOMETRY PAUSED");
+                telemetry.addData("Turret Ticks", "current=%d target=%.1f limits=[%d, %d]",
+                        turret.getCurrentTicks(), turret.getTargetTicks(),
+                        turretSubsystem.MIN_TURRET_TICKS,
+                        turretSubsystem.MAX_TURRET_TICKS);
+                telemetry.addData("Turret Raw / Zero", "%d / %d",
+                        robot.getTurretRawEncoderTicks(),
+                        robot.getTurretEncoderZeroTicks());
+                telemetry.addData("Allowed visible IDs", turret.getVisibleTagIds());
+                telemetry.addData("Alliance / CELL", "%s / %s",
+                        turret.getAlliance(), turret.getSelectedClusterName());
+                telemetry.addData("CELL Roll", Double.isFinite(turret.getSelectedClusterRollDeg())
+                        ? String.format("%.1f deg (UP)", turret.getSelectedClusterRollDeg())
+                        : "no scorable CELL");
+                telemetry.addData("Side Aim", "camera=%+.1f shooter=%+.1f, offset=%+.1f in (%+.2f deg)",
+                        turret.getCameraSideOfClusterIn(), turret.getShooterSideOfClusterIn(),
+                        turret.getBankAimOffsetIn(), turret.getBankAimCorrectionDeg());
+                double shooterDistanceIn = turret.getShooterDistanceIn();
+                telemetry.addData("Shooter Range",
+                        turret.hasDistance() && Double.isFinite(shooterDistanceIn)
+                                && shooterDistanceIn > 0
+                                ? String.format(java.util.Locale.US, "%.1f in", shooterDistanceIn)
+                                : "NO VALID RANGE (RPM fallback active)");
+                telemetry.addData("Range Source",
+                        turret.hasDistance() && Double.isFinite(shooterDistanceIn)
+                                ? turret.hasTarget() ? "LIVE TAG" : "HELD ODOMETRY"
+                                : turret.hasTarget()
+                                  ? "TAG VISIBLE; CAMERA GEOMETRY INVALID"
+                                  : "NO ALLOWED TAG");
+                telemetry.addData("Chassis Aim Assist", "DISABLED");
+                telemetry.addData("Aim Ready?", turret.isAimReady() ? "READY" : "ALIGNING");
+                telemetry.addData("Intake Toggle", intakeToggle ? "ON" : "OFF");
+                telemetry.addData("Outtake Toggle", outtakeToggle ? "ON" : "OFF");
+                telemetry.addData("Shooter RPM", "target=%.0f actual=%.0f %s",
+                        shooter.getTargetRpm(), shooter.getActualRpm(),
+                        !outtakeToggle ? "OFF"
+                                : shooter.isAtSpeed() ? "READY" : "SPINNING UP");
+                telemetry.addData("Transfer", transferFeeding ? "FEEDING (A)"
+                        : transferReverse ? "REVERSING (X)" : "OFF");
+                telemetry.addData("Odo pose", "x=%.1f y=%.1f hdg=%.1f",
+                        robot.odo.getPosX(DistanceUnit.INCH),
+                        robot.odo.getPosY(DistanceUnit.INCH),
+                        Math.toDegrees(robot.odo.getHeading(
+                                AngleUnit.RADIANS)));
+                telemetry.addData("FUSION", "ON (competition locked)");
+                telemetry.addData("Ready after stop (ms)", "%.0f", turret.getReadyAfterStopMs());
+                telemetry.addData("Log", rec.getStatus());
+                addControlsTelemetry();
+
+                telemetry.update();
             }
-            lastRightTrigger = currentRightTrigger;
-
-            boolean currentLeftTrigger = gamepad1.left_trigger > 0.5;
-            if (currentLeftTrigger && !lastLeftTrigger) {
-                outtakeToggle = !outtakeToggle;
-            }
-            lastLeftTrigger = currentLeftTrigger;
-
-            boolean spit = gamepad1.right_bumper;
-
-            if (spit) {
-                robot.intake.setPower(-INTAKE_POWER);
-            } else {
-                robot.intake.setPower(intakeToggle ? INTAKE_POWER : 0.0);
-            }
-
-            if (turret.hasDistance()) {
-                shooter.setTargetForDistance(turret.getShooterDistanceIn());
-            } else {
-                shooter.setTargetRpm(shooterSubsystem.COMPETITION_RPM);
-            }
-            shooter.setShooterEnabled(outtakeToggle);
-            shooter.update(dtSeconds);
-
-            boolean transferRequested = gamepad1.a;
-            boolean transferReverse = gamepad1.x;
-
-            // Auto-aim starts enabled. Tap LB to switch to/from manual aiming.
-            boolean currentLeftBumper = gamepad1.left_bumper;
-            if (currentLeftBumper && !lastLeftBumper) {
-                autoAimEnabled = !autoAimEnabled;
-            }
-            lastLeftBumper = currentLeftBumper;
-            turret.setAutoAimEnabled(autoAimEnabled);
-
-            double manualTurretCommand = (gamepad1.dpad_right ? 1.0 : 0.0)
-                    - (gamepad1.dpad_left ? 1.0 : 0.0);
-            turret.setManualPower(manualTurretCommand * MANUAL_TURRET_POWER);
-            turret.update(dtSeconds);
-
-            // Keep readiness as telemetry for the driver/log, but A always owns
-            // forward transfer directly. The driver decides when to release a shot.
-            boolean shotReady = shooter.isAtSpeed()
-                    && (!autoAimEnabled || turret.isAimReady());
-            boolean transferFeeding = transferRequested;
-            if (transferFeeding) {
-                robot.transfer.setPower(TRANSFER_POWER);
-            } else if (transferReverse) {
-                robot.transfer.setPower(-TRANSFER_POWER);
-            } else {
-                robot.transfer.setPower(0);
-            }
-
-            if (outtakeCurrentTimer.seconds() >= OUTTAKE_CURRENT_SAMPLE_SECONDS) {
-                outtakeCurrentTimer.reset();
-                try {
-                    outtakeCurrentAmps = robot.readOuttakeCurrentAmps();
-                } catch (Throwable ignored) { }
-            }
-
-            double transferCommand = transferFeeding ? TRANSFER_POWER
-                    : transferReverse ? -TRANSFER_POWER : 0.0;
-            double transferRpm = robot.transfer.getVelocity() * 60.0
-                    / TRANSFER_TICKS_PER_REVOLUTION;
-
-            // Auto-aim moves only the turret. Chassis rotation is always the
-            // driver's right-stick command.
-            double driveTurn = turn;
-
-            double denominator = Math.max(
-                    Math.abs(forward) + Math.abs(lateral) + Math.abs(driveTurn), 1.0);
-            robot.lf.setPower((forward + lateral + driveTurn) / denominator);
-            robot.lb.setPower((forward - lateral + driveTurn) / denominator);
-            robot.rf.setPower((forward - lateral - driveTurn) / denominator);
-            robot.rb.setPower((forward + lateral - driveTurn) / denominator);
-
-            // ---- flight recorder row ----
-            turret.logTo(rec);
-            rec.put("op_dt_ms", dtSeconds * 1000.0);
-            rec.put("in_forward", forward);
-            rec.put("in_lateral", lateral);
-            rec.put("in_turn", turn);
-            rec.put("in_autoaim", autoAimEnabled);
-            rec.put("in_dpad_manual", manualTurretCommand);
-            rec.put("in_intake_on", intakeToggle);
-            rec.put("in_outtake_on", outtakeToggle);
-            rec.put("in_transfer_requested", transferRequested);
-            rec.put("shot_ready", shotReady);
-            rec.put("in_transfer_command", transferCommand);
-            rec.put("transfer_actual_rpm", transferRpm);
-            rec.put("shoot_current_a", outtakeCurrentAmps);
-            shooter.logTo(rec);
-            rec.endRow();
-
-            sendDashboardTelemetry(
-                    dtSeconds, transferRequested, shotReady,
-                    transferCommand, transferRpm);
-
-            telemetry.addData("Turret Mode", autoAimEnabled ? "AUTO-AIM" : "MANUAL");
-            telemetry.addData("Target Visible", turret.hasTarget()
-                    ? "YES (ID: " + turret.getSelectedTagId() + ")"
-                    : turret.isOdometryTrackingActive()
-                            ? "ODOMETRY MEMORY" : "NO");
-            telemetry.addData("Hive Field Memory",
-                    !turret.hasFieldTargetMemory() ? "EMPTY"
-                            : turret.isOdometryPoseValid()
-                                    ? "SAVED / TRACKING"
-                                    : "SAVED / ODOMETRY PAUSED");
-            telemetry.addData("Turret Ticks", "current=%d target=%.1f limits=[%d, %d]",
-                    turret.getCurrentTicks(), turret.getTargetTicks(),
-                    turretSubsystem.MIN_TURRET_TICKS,
-                    turretSubsystem.MAX_TURRET_TICKS);
-            telemetry.addData("Turret Raw / Zero", "%d / %d",
-                    robot.getTurretRawEncoderTicks(),
-                    robot.getTurretEncoderZeroTicks());
-            telemetry.addData("Allowed visible IDs", turret.getVisibleTagIds());
-            telemetry.addData("Alliance / CELL", "%s / %s",
-                    turret.getAlliance(), turret.getSelectedClusterName());
-            telemetry.addData("CELL Roll", Double.isFinite(turret.getSelectedClusterRollDeg())
-                    ? String.format("%.1f deg (UP)", turret.getSelectedClusterRollDeg())
-                    : "no scorable CELL");
-            telemetry.addData("Side Aim", "camera=%+.1f shooter=%+.1f, offset=%+.1f in (%+.2f deg)",
-                    turret.getCameraSideOfClusterIn(), turret.getShooterSideOfClusterIn(),
-                    turret.getBankAimOffsetIn(), turret.getBankAimCorrectionDeg());
-            double shooterDistanceIn = turret.getShooterDistanceIn();
-            telemetry.addData("Shooter Range",
-                    turret.hasDistance() && Double.isFinite(shooterDistanceIn)
-                            && shooterDistanceIn > 0
-                            ? String.format(java.util.Locale.US, "%.1f in", shooterDistanceIn)
-                            : "NO VALID RANGE (RPM fallback active)");
-            telemetry.addData("Range Source",
-                    turret.hasDistance() && Double.isFinite(shooterDistanceIn)
-                            ? turret.hasTarget() ? "LIVE TAG" : "HELD ODOMETRY"
-                            : turret.hasTarget()
-                                    ? "TAG VISIBLE; CAMERA GEOMETRY INVALID"
-                                    : "NO ALLOWED TAG");
-            telemetry.addData("Chassis Aim Assist", "DISABLED");
-            telemetry.addData("Aim Ready?", turret.isAimReady() ? "READY" : "ALIGNING");
-            telemetry.addData("Intake Toggle", intakeToggle ? "ON" : "OFF");
-            telemetry.addData("Outtake Toggle", outtakeToggle ? "ON" : "OFF");
-            telemetry.addData("Shooter RPM", "target=%.0f actual=%.0f %s",
-                    shooter.getTargetRpm(), shooter.getActualRpm(),
-                    !outtakeToggle ? "OFF"
-                            : shooter.isAtSpeed() ? "READY" : "SPINNING UP");
-            telemetry.addData("Transfer", transferFeeding ? "FEEDING (A)"
-                    : transferReverse ? "REVERSING (X)" : "OFF");
-            telemetry.addData("Odo pose", "x=%.1f y=%.1f hdg=%.1f",
-                    robot.odo.getPosX(DistanceUnit.INCH),
-                    robot.odo.getPosY(DistanceUnit.INCH),
-                    Math.toDegrees(robot.odo.getHeading(
-                            AngleUnit.RADIANS)));
-            telemetry.addData("FUSION", "ON (competition locked)");
-            telemetry.addData("Ready after stop (ms)", "%.0f", turret.getReadyAfterStopMs());
-            telemetry.addData("Log", rec.getStatus());
-            addControlsTelemetry();
-
-            telemetry.update();
-        }
         } catch (Throwable t) {
             rec.exception("biobuzzTeleop loop", t);
             throw t;

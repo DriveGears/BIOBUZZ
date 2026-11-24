@@ -27,7 +27,7 @@ public class turretSubsystem {
     // ========================= VALUES TO CALIBRATE =========================
 
     /** Displayed by the test TeleOp so the deployed tuning profile is verifiable. */
-    public static final String TUNE_VERSION = "clean-v8-continuous-side-bank";
+    public static final String TUNE_VERSION = "clean-v9-shooter-height-trim";
 
     /** Limelight AprilTag pipeline number. */
     public static final int APRILTAG_PIPELINE = 1;
@@ -95,7 +95,7 @@ public class turretSubsystem {
      */
     public static double RIGHT_POSITION_AIM_LEFT_IN = 14.0;
     public static double SIDE_AIM_START_RIGHT_IN = 0.0;
-    public static double SIDE_AIM_FULL_RIGHT_IN = 8.0;
+    public static double SIDE_AIM_FULL_RIGHT_IN = 8.2;//8.0
     public static double SIDE_POSITION_FILTER_ALPHA = 0.25;
     public static double BANK_AIM_FILTER_ALPHA = 0.25;
 
@@ -109,6 +109,16 @@ public class turretSubsystem {
     public static final double CLUSTER_AIM_POINT_FORWARD_OF_TAGS_IN = 7.1874;
     /** Official SDK Z offset: tag centers are this far below the opening origin. */
     public static final double CLUSTER_AIM_POINT_ABOVE_TAGS_IN = 5.622;
+
+    /**
+     * Fixed bias added to the range handed to the shooter RPM table.
+     * The ball currently lands ~5 cm (2 in) low at every distance, i.e. a
+     * constant energy deficit rather than a range-calibration error, so a
+     * fixed trim is the right shape: positive -> the table thinks the hive
+     * is farther away -> more flywheel RPM -> higher impact point.
+     * Tune in 1 in steps; set to 0 to disable.
+     */
+    public static double SHOOTER_DISTANCE_TRIM_IN = 6.75;//6.25
 
     /**
      * Clean PID starting point for the rebuilt mechanism. These are deliberately
@@ -556,7 +566,7 @@ public class turretSubsystem {
                 || stableAimFrames >= AIM_STABLE_FRAMES;
         boolean settled = !autoAimEnabled
                 || (Math.abs(controlTargetTicks - currentTicks) <= READY_POSITION_TOL_TICKS
-                    && Math.abs(filteredMotorVelocityTicksPerSecond) <= READY_MAX_VELOCITY_TPS);
+                && Math.abs(filteredMotorVelocityTicksPerSecond) <= READY_MAX_VELOCITY_TPS);
         boolean wasReady = aimReady;
         aimReady = targetKnown && sourceStable && settled;
         if (aimReady && !wasReady && autoAimEnabled) {
@@ -708,6 +718,8 @@ public class turretSubsystem {
         r.put("vis_stable_frames", stableAimFrames);
         r.put("vis_geometry_ok", clusterGeometryValid);
         r.put("vis_dist_in", filteredDistanceIn);
+        r.put("shoot_dist_in", getShooterDistanceIn());
+        r.put("shoot_dist_trim_in", SHOOTER_DISTANCE_TRIM_IN);
         r.put("vis_target_age_ms", Math.min(getTargetAgeMs(), 99999));
 
         r.put("aim_ready", aimReady);
@@ -806,7 +818,7 @@ public class turretSubsystem {
         // A positive turret movement reduces a same-direction image error.
         double turretMovementDeg = LATENCY_COMPENSATION_ENABLED
                 ? -(currentTicks - ticksAtCapture)
-                        / (AIM_DIRECTION_SIGN * TICKS_PER_DEGREE) : 0;
+                  / (AIM_DIRECTION_SIGN * TICKS_PER_DEGREE) : 0;
         dbgTurretMoveDeg = turretMovementDeg;
         double horizontalErrorDeg = filteredTxDeg;
 
@@ -849,12 +861,12 @@ public class turretSubsystem {
                 dbgGain = 1.0;
             } else if (Math.abs(measuredTargetTicks - targetTicks) < VISION_DEADBAND_TICKS
                     && Math.abs(filteredMotorVelocityTicksPerSecond)
-                            < VISION_DEADBAND_MAX_VELOCITY_TPS) {
+                    < VISION_DEADBAND_MAX_VELOCITY_TPS) {
                 dbgGain = 0;
             } else {
                 dbgGain = VISION_GAIN_MIN + (VISION_GAIN_MAX - VISION_GAIN_MIN)
                         * clamp(Math.abs(measuredTargetTicks - targetTicks)
-                                / (VISION_GAIN_FULL_ERROR_DEG * TICKS_PER_DEGREE), 0, 1);
+                        / (VISION_GAIN_FULL_ERROR_DEG * TICKS_PER_DEGREE), 0, 1);
                 targetTicks = (1.0 - dbgGain) * targetTicks + dbgGain * measuredTargetTicks;
             }
         } else {
@@ -1068,7 +1080,7 @@ public class turretSubsystem {
                 boolean matchesPending = !pendingExpired
                         && Double.isFinite(fusPendingX) && Double.isFinite(fusPendingY)
                         && Math.hypot(meas[0] - fusPendingX, meas[1] - fusPendingY)
-                                <= FUSION_CONFIRM_MATCH_IN;
+                        <= FUSION_CONFIRM_MATCH_IN;
                 if (!matchesPending) {
                     fusPendingX = meas[0];
                     fusPendingY = meas[1];
@@ -1101,7 +1113,7 @@ public class turretSubsystem {
                 clearFusionPending();
                 double gain = robotStopped
                         ? clamp(FUSION_STILL_GAIN_MIN + FUSION_STILL_GAIN_PER_DEG * Math.abs(fusResidDeg),
-                                FUSION_STILL_GAIN_MIN, FUSION_MEASUREMENT_GAIN)
+                        FUSION_STILL_GAIN_MIN, FUSION_MEASUREMENT_GAIN)
                         : FUSION_MEASUREMENT_GAIN;
                 fusX += gain * (meas[0] - fusX);
                 fusY += gain * (meas[1] - fusY);
@@ -1277,7 +1289,7 @@ public class turretSubsystem {
                 && absError <= NEAR_TARGET_STALL_WINDOW_TICKS
                 && Math.abs(targetVelocityTicksPerSecond) < 2.0
                 && Math.abs(filteredMotorVelocityTicksPerSecond)
-                        <= NEAR_TARGET_STALL_MAX_VELOCITY_TPS;
+                <= NEAR_TARGET_STALL_MAX_VELOCITY_TPS;
         if (!nearlyStalled) {
             nearTargetStallSinceMs = -1;
             nearTargetStallSetpointTicks = Double.NaN;
@@ -1285,7 +1297,7 @@ public class turretSubsystem {
         }
         if (nearTargetStallSinceMs < 0
                 || Math.abs(controlTargetTicks - nearTargetStallSetpointTicks)
-                        >= NEAR_TARGET_STALL_RETRY_DELTA_TICKS) {
+                >= NEAR_TARGET_STALL_RETRY_DELTA_TICKS) {
             nearTargetStallSinceMs = nowMs;
             nearTargetStallSetpointTicks = controlTargetTicks;
             return false;
@@ -1446,7 +1458,7 @@ public class turretSubsystem {
         if (Math.abs(distanceToMin - distanceToMax) <= switchHysteresisTicks) {
             blindSectorRouteTicks = Math.abs(currentTicks - MIN_TURRET_TICKS)
                     <= Math.abs(currentTicks - MAX_TURRET_TICKS)
-                            ? MIN_TURRET_TICKS : MAX_TURRET_TICKS;
+                    ? MIN_TURRET_TICKS : MAX_TURRET_TICKS;
             return blindSectorRouteTicks;
         }
         blindSectorRouteTicks = distanceToMin < distanceToMax
@@ -1592,7 +1604,7 @@ public class turretSubsystem {
         final double totalArea;
 
         ClusterCandidate(int firstId, List<LLResultTypes.FiducialResult> tags,
-                double rollDeg, double totalArea) {
+                         double rollDeg, double totalArea) {
             this.firstId = firstId;
             this.tags = tags;
             this.rollDeg = rollDeg;
@@ -1631,7 +1643,7 @@ public class turretSubsystem {
         if (Double.isFinite(measuredTagPlaneDepthIn)
                 && Double.isFinite(lastClusterTagPlaneDepthIn)
                 && Math.abs(measuredTagPlaneDepthIn - lastClusterTagPlaneDepthIn)
-                        <= AIM_DEPTH_RESEED_DELTA_IN) {
+                <= AIM_DEPTH_RESEED_DELTA_IN) {
             double depthGain = robotStopped
                     ? AIM_DEPTH_FILTER_ALPHA_STILL : AIM_DEPTH_FILTER_ALPHA_MOVING;
             aimTagPlaneDepthIn = lastClusterTagPlaneDepthIn
@@ -1643,9 +1655,9 @@ public class turretSubsystem {
         if (Double.isFinite(aimTagPlaneDepthIn)
                 && Double.isFinite(measuredTagPlaneDepthIn)
                 && aimTagPlaneDepthIn > CLUSTER_AIM_POINT_FORWARD_OF_TAGS_IN
-                        + CLUSTER_AIM_POINT_ABOVE_TAGS_IN + 1.0
+                + CLUSTER_AIM_POINT_ABOVE_TAGS_IN + 1.0
                 && measuredTagPlaneDepthIn > CLUSTER_AIM_POINT_FORWARD_OF_TAGS_IN
-                        + CLUSTER_AIM_POINT_ABOVE_TAGS_IN + 1.0) {
+                + CLUSTER_AIM_POINT_ABOVE_TAGS_IN + 1.0) {
             double aimLateralSum = 0;
             double measuredLateralSum = 0;
             for (LLResultTypes.FiducialResult tag : tags) {
@@ -1747,7 +1759,7 @@ public class turretSubsystem {
         double rightSideFraction = clamp(
                 (shooterSideOfClusterIn - SIDE_AIM_START_RIGHT_IN)
                         / Math.max(0.1,
-                                SIDE_AIM_FULL_RIGHT_IN - SIDE_AIM_START_RIGHT_IN),
+                        SIDE_AIM_FULL_RIGHT_IN - SIDE_AIM_START_RIGHT_IN),
                 0, 1);
         double requestedBankOffsetIn = -RIGHT_POSITION_AIM_LEFT_IN
                 * rightSideFraction;
@@ -1932,13 +1944,18 @@ public class turretSubsystem {
      * odometry updates its distance every loop and carries it through brief occlusion.
      */
     public double getShooterDistanceIn() {
+        double distanceIn;
         if (hasFusedDistance()
                 && (!distanceInitialized
-                    || !targetVisible
-                    || Math.abs(fusDistanceIn - filteredDistanceIn) <= FUSION_REJECT_IN)) {
-            return fusDistanceIn;
+                || !targetVisible
+                || Math.abs(fusDistanceIn - filteredDistanceIn) <= FUSION_REJECT_IN)) {
+            distanceIn = fusDistanceIn;
+        } else {
+            distanceIn = filteredDistanceIn;
         }
-        return filteredDistanceIn;
+        // Never let the trim turn "no range yet" (0) into a real command.
+        if (!(distanceIn > 0)) return distanceIn;
+        return Math.min(distanceIn + SHOOTER_DISTANCE_TRIM_IN, MAX_DISTANCE_IN);
     }
     public double getRobotForwardVelocityInPerSec() { return robotForwardVelocityInPerSec; }
     public double getRobotLeftVelocityInPerSec() { return robotLeftVelocityInPerSec; }

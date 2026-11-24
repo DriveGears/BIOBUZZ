@@ -1,9 +1,12 @@
 package org.firstinspires.ftc.teamcode.hardware;
 
+import com.pedropathing.revhub.localizers.PinpointConfig;
 import com.qualcomm.hardware.gobilda.GoBildaPinpointDriver;
 import com.qualcomm.hardware.limelightvision.Limelight3A;
 import com.qualcomm.hardware.lynx.LynxModule;
+import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
+import com.qualcomm.robotcore.hardware.DcMotorSimple;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 import com.qualcomm.robotcore.hardware.PwmControl;
 import com.qualcomm.robotcore.hardware.ServoImplEx;
@@ -17,6 +20,8 @@ import org.firstinspires.ftc.teamcode.PedroPathing.Constants;
 import org.firstinspires.ftc.robotcore.external.navigation.CurrentUnit;
 
 import java.util.List;
+import java.util.Locale;
+import java.util.OptionalDouble;
 
 public class Hardware {
 
@@ -33,6 +38,7 @@ public class Hardware {
 
     /** Raw encoder count captured while the turret is centered during INIT. */
     private int turretEncoderZeroTicks;
+    private static int sharedTurretEncoderZeroTicks = Integer.MIN_VALUE;
 
     private final List<LynxModule> hubs;
     private VoltageSensor batterySensor;
@@ -101,7 +107,11 @@ public class Hardware {
         // Position and velocity remain readable in this mode. The turret uses
         // its own software PID, so do not layer the hub's velocity PID on top.
         turret.setMode(DcMotorEx.RunMode.RUN_WITHOUT_ENCODER);
-        setTurretCurrentPositionAsZero();
+        if (sharedTurretEncoderZeroTicks == Integer.MIN_VALUE) {
+            setTurretCurrentPositionAsZero();
+        } else {
+            turretEncoderZeroTicks = sharedTurretEncoderZeroTicks;
+        }
 
         try {
             configureOdometry();
@@ -122,7 +132,7 @@ public class Hardware {
 
         // What was left over from the previous OpMode / power-up (diagnostic only).
         odo.update();
-        odoReport.append(String.format(java.util.Locale.US,
+        odoReport.append(String.format(Locale.US,
                 "ODO_STALE_STATE status=%s pose=(%.2f, %.2f, %.1fdeg) offsets=(%.3f, %.3f)in yaw=%.4f mmPerTick(read via enc)\n",
                 odo.getDeviceStatus(), odo.getPosX(DistanceUnit.INCH), odo.getPosY(DistanceUnit.INCH),
                 odo.getHeading(AngleUnit.DEGREES), odo.getXOffset(DistanceUnit.INCH),
@@ -138,9 +148,9 @@ public class Hardware {
                         : " (bulk read scope NOT supported: using the driver's full read)\n");
 
         // Pod geometry/resolution come from Pedro's Constants (single source of truth).
-        com.pedropathing.revhub.localizers.PinpointConfig pc = Constants.localizerConfig;
+        PinpointConfig pc = Constants.localizerConfig;
         odo.setOffsets(pc.xPodOffset.get(), pc.yPodOffset.get(), pc.offsetUnits.get());
-        java.util.OptionalDouble ticks = pc.ticksPerUnit.get();
+        OptionalDouble ticks = pc.ticksPerUnit.get();
         if (ticks != null && ticks.isPresent()) {
             odo.setEncoderResolution(ticks.getAsDouble(), pc.encoderResolutionUnit.get());
         } else {
@@ -186,7 +196,7 @@ public class Hardware {
             odoLean = Math.hypot(lx - fx, ly - fy) < 0.5 && dh < 1.0
                     && Math.abs(lx - OdometryConfig.START_X_IN) < 3.0;
             if (!odoLean) useFullOdometryScope();
-            odoReport.append(String.format(java.util.Locale.US,
+            odoReport.append(String.format(Locale.US,
                     "ODO_LEAN_READ %s full=(%.2f,%.2f,%.1f) lean=(%.2f,%.2f,%.1f)\n",
                     odoLean ? "OK" : "REJECTED->full", fx, fy, fh, lx, ly, lh));
             } catch (Throwable t) {
@@ -195,7 +205,7 @@ public class Hardware {
                 odoReport.append("ODO_LEAN_READ FAILED ").append(t).append(" -> full read\n");
             }
         }
-        odoReport.append(String.format(java.util.Locale.US,
+        odoReport.append(String.format(Locale.US,
                 "ODO_CONFIGURED status=%s start=(%.2f,%.2f,%.1fdeg) offsets=(%.3f,%.3f)in ticksPerMm=%.4f yawScalar=%.5f took=%.0fms\n",
                 status, fx, fy, fh, pc.xPodOffset.get(), pc.yPodOffset.get(),
                 OdometryConfig.activeTicksPerMm(), OdometryConfig.YAW_SCALAR,
@@ -316,6 +326,7 @@ public class Hardware {
      */
     public void setTurretCurrentPositionAsZero() {
         turretEncoderZeroTicks = turret.getCurrentPosition();
+        sharedTurretEncoderZeroTicks = turretEncoderZeroTicks;
     }
 
     /** Returns turret encoder ticks relative to the center captured during INIT. */
