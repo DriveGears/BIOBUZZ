@@ -1,6 +1,5 @@
 package org.firstinspires.ftc.teamcode.opmodes.testing;
 
-import com.qualcomm.robotcore.eventloop.opmode.Disabled;
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.util.ElapsedTime;
@@ -10,8 +9,7 @@ import org.firstinspires.ftc.teamcode.subsystems.FlightRecorder;
 import org.firstinspires.ftc.teamcode.subsystems.shooterSubsystem;
 import org.firstinspires.ftc.teamcode.subsystems.turretSubsystem;
 
-@Disabled
-@TeleOp(name = "biobuzz testing teleop", group = "Testing")
+@TeleOp(name = "biobuzz turret testing teleop", group = "Testing")
 public class turretTest extends LinearOpMode {
 
     private static final double DRIVE_SPEED = 0.80;
@@ -27,6 +25,9 @@ public class turretTest extends LinearOpMode {
     @Override
     public void runOpMode() {
         Hardware.resetInstance();
+        // Every test starts with the competition fusion path enabled. D-pad up
+        // can still toggle it during a run for a vision-only comparison.
+        turretSubsystem.ODOMETRY_FUSION_ENABLED = true;
         Hardware robot = Hardware.getInstance(hardwareMap);
         turretSubsystem turret = new turretSubsystem(robot);
         shooterSubsystem shooter = new shooterSubsystem(robot);
@@ -52,9 +53,17 @@ public class turretTest extends LinearOpMode {
         telemetry.addLine("G1 Left Stick: Drive | Right Trigger: Hold Auto-Aim");
         telemetry.addLine("G1 D-pad L/R: Manual Turret | A: Toggle Shooter/Intakes | B: Stop");
         telemetry.addLine("Click BOTH sticks: set current turret angle to zero");
-        telemetry.update();
-
-        waitForStart();
+        telemetry.addLine("LED: white=manual, red=aligning, green=locked");
+        turretSubsystem.Alliance testAlliance = turretSubsystem.Alliance.BLUE;
+        while (!isStarted() && !isStopRequested()) {
+            if (gamepad1.x) testAlliance = turretSubsystem.Alliance.RED;
+            if (gamepad1.b) testAlliance = turretSubsystem.Alliance.BLUE;
+            turret.setAlliance(testAlliance);
+            telemetry.addData("TEST ALLIANCE", testAlliance);
+            telemetry.addLine("Before START: X = RED, B = BLUE");
+            telemetry.update();
+            idle();
+        }
         if (isStopRequested()) {
             turret.stop();
             shooter.stop();
@@ -64,7 +73,8 @@ public class turretTest extends LinearOpMode {
             return;
         }
 
-        rec.event("OPMODE_START tune=" + turretSubsystem.TUNE_VERSION);
+        rec.event("OPMODE_START tune=" + turretSubsystem.TUNE_VERSION
+                + " alliance=" + testAlliance);
         loopTimer.reset();
         try {
             while (opModeIsActive()) {
@@ -94,7 +104,7 @@ public class turretTest extends LinearOpMode {
 
                 // Set target RPM for distance if turret has distance, otherwise default
                 if (turret.hasDistance()) {
-                    shooter.setTargetForDistance(turret.getImpactDistanceIn());
+                    shooter.setTargetForDistance(turret.getShooterDistanceIn());
                 } else {
                     shooter.setTargetRpm(shooterSubsystem.COMPETITION_RPM);
                 }
@@ -140,11 +150,21 @@ public class turretTest extends LinearOpMode {
                 telemetry.addData("Drive", "Fwd=%.2f, Strafe=%.2f, Turn=%.2f", forward, strafe, turn);
                 telemetry.addData("Turret Mode", autoAim ? "AUTO-AIM" : "MANUAL");
                 telemetry.addData("Turret Tune", turretSubsystem.TUNE_VERSION);
+                telemetry.addData("Alliance / CELL", "%s / %s",
+                        turret.getAlliance(), turret.getSelectedClusterName());
+                telemetry.addData("Side Aim", "camera=%+.1f shooter=%+.1f, offset=%+.1f in (%+.2f deg)",
+                        turret.getCameraSideOfClusterIn(), turret.getShooterSideOfClusterIn(),
+                        turret.getBankAimOffsetIn(), turret.getBankAimCorrectionDeg());
                 telemetry.addData("Target Visible", turret.hasTarget()
                         ? "YES (" + turret.getVisibleTagCount() + " tags: "
                           + turret.getVisibleTagIds() + ")"
                         : turret.isOdometryTrackingActive()
                           ? "ODOMETRY (vision lost)" : "NO");
+                telemetry.addData("Hive Field Memory",
+                        !turret.hasFieldTargetMemory() ? "EMPTY"
+                                : turret.isOdometryPoseValid()
+                                        ? "SAVED / TRACKING"
+                                        : "SAVED / ODOMETRY PAUSED");
                 telemetry.addData("Odo Target", "active=%s age=%.0f ms bearing=%+.1f dist=%.1f",
                         turret.isOdometryTrackingActive(), turret.getTargetAgeMs(),
                         turret.getOdometryTrackedBearingDeg(),
@@ -169,6 +189,12 @@ public class turretTest extends LinearOpMode {
                         turret.getFilteredMotorVelocityTicksPerSecond(),
                         turret.getAppliedPower(),
                         turret.getIntegralPower());
+                telemetry.addData("PID Gains", "P=%.4f I=%.4f D=%.4f kV=%.4f kS=%.3f",
+                        turretSubsystem.POSITION_KP,
+                        turretSubsystem.POSITION_KI,
+                        turretSubsystem.VELOCITY_KD,
+                        turretSubsystem.VELOCITY_KV,
+                        turretSubsystem.STATIC_FRICTION_POWER);
                 telemetry.addData("Turret Vision", "tx=%+.2f deg, err=%+.2f deg",
                         turret.getFilteredTxDeg(), turret.getLastVisionErrorDeg());
                 telemetry.addData("Shooter", "Enabled=%s, Actual RPM=%.0f", shooter.isEnabled() ? "ON" : "OFF", shooter.getActualRpm());

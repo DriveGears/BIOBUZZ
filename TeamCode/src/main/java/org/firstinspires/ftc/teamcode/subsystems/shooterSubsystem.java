@@ -15,43 +15,42 @@ public class shooterSubsystem {
     /** Motor revolutions per OUTTAKE revolution. Use 1.0 for a direct drive. */
     public static final double MOTOR_REVS_PER_OUTTAKE_REV = 1.0;
 
-    /** Close/mid-field baseline. Long shots add RPM through the table below. */
-    public static final double COMPETITION_RPM = 2800.0;
+    /** Normal field baseline used as a reference for the calibrated table below. */
+    public static final double COMPETITION_RPM = 2900.0;
 
     /**
-     * Conservative first-pass distance calibration. Close shots use the baseline;
-     * long shots progressively add RPM. Replace these with measured make/miss data.
+     * Exponential-like calibration: RPM rises gently through normal shooting
+     * positions, then the slope increases toward the far corners. Linear interpolation
+     * between these points approximates the curve without adding another tuning model.
      */
     public static final double[] SHOT_DISTANCE_IN = {
-            38, 60, 82, 90, 98, 120, 132
+            60, 90, 100, 120, 160, 180
     };
     public static final double[] SHOT_RPM = {
-            COMPETITION_RPM, COMPETITION_RPM, 2900, 3000,
-            3075, 3250, 3350
+            2900, 2950, 3000, 3000, 3050, 3075
     };
 
     // Competition PIDF defaults (RUN_WITHOUT_ENCODER motor mode).
     public static final double DEFAULT_KP = 0.003; // 0.0014
-    public static final double DEFAULT_KI = 0.0005;
+    /** Small trim only; a larger integral caused a +100 RPM rebound after each shot. */
+    public static final double DEFAULT_KI = 0.00015;
     public static final double DEFAULT_KD = 0.0; // 0.0001
-    public static final double DEFAULT_KF = 0.0005; // 0.000435
-    private static final double MAX_INTEGRAL_SUM = 200.0;
-
-    // Full-range servo positions for goBILDA RGB Indicator Light 3118-0808-0002.
-    private static final double LED_IDLE_POSITION = 1.000;  // 2500 us, solid white standby
-    private static final double LED_RED_POSITION = 0.300;   // 1100 us
-    private static final double LED_GREEN_POSITION = 0.500; // 1500 us
     /**
-     * While spinning, use the indicator's red-to-green hue range to show RPM error.
-     * Errors at or above this value are red; smaller errors progressively approach green.
+     * Log-calibrated at 2900 RPM: 0.000430 settled around 2931 RPM and contributed
+     * to the post-shot rebound. P supplies the temporary recovery torque.
      */
-    public static final double LED_FULL_SCALE_ERROR_RPM = 1000.0;
-    /** Reserve the final green endpoint for the stable READY state. */
-    private static final double LED_SPIN_UP_MAX_CLOSENESS = 0.90;
-    private static final double LED_MIN_POSITION_CHANGE = 0.004;
+    public static final double DEFAULT_KF = 0.000395;
+    /** Integral only corrects small steady errors; it must not build during spin-up. */
+    public static final double INTEGRAL_ZONE_RPM = 60.0;
+    private static final double MAX_INTEGRAL_SUM = 150.0;
+
+    /** Extra torque only while the transfer is feeding and a shot has pulled RPM down. */
+    public static final double FEED_RECOVERY_POWER_BOOST = 0.05;
+    /** Avoid switching the boost on for ordinary encoder quantization near the setpoint. */
+    public static final double FEED_RECOVERY_MIN_ERROR_RPM = 75.0;
 
     /** Maximum allowed request and how quickly the commanded RPM may change. */
-    public static final double MAX_RPM = 3400.0;
+    public static final double MAX_RPM = 3700.0;
     public static final double SPIN_UP_RPM_PER_SECOND = 15000.0;
     public static final double SPIN_DOWN_RPM_PER_SECOND = 10000.0;
 
@@ -84,16 +83,8 @@ public class shooterSubsystem {
     private double iTerm;
     private double dTerm;
     private double fTerm;
+    private double recoveryBoostPower;
     private double appliedPower;
-    private IndicatorState indicatorState;
-    private double indicatorPosition = Double.NaN;
-
-    private enum IndicatorState {
-        IDLE,
-        SPINNING_UP,
-        READY
-    }
-
     public shooterSubsystem(Hardware robot) {
         if (SHOT_DISTANCE_IN.length != SHOT_RPM.length || SHOT_DISTANCE_IN.length == 0) {
             throw new IllegalStateException("SHOT_DISTANCE_IN and SHOT_RPM must have equal lengths");
@@ -102,7 +93,6 @@ public class shooterSubsystem {
         this.robot = robot;
         robot.outtake.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
         stopFlywheel();
-        setIndicator(IndicatorState.IDLE);
     }
 
     public void setShooterEnabled(boolean enabled) {
@@ -114,9 +104,6 @@ public class shooterSubsystem {
             readyLoops = 0;
             atSpeed = false;
             stopFlywheel();
-            setIndicator(IndicatorState.IDLE);
-        } else {
-            setIndicator(IndicatorState.SPINNING_UP);
         }
     }
 
@@ -166,8 +153,6 @@ public class shooterSubsystem {
     /** Call once per OpMode loop. */
     public void update(double dtSeconds) {
         if (!enabled) {
-            // Reassert standby if another OpMode/device action disabled this servo channel.
-            setIndicator(IndicatorState.IDLE);
             return;
         }
 
@@ -180,35 +165,54 @@ public class shooterSubsystem {
         double targetTPS = rpmToTicksPerSecond(commandedRpm);
         double actualTPS = robot.outtake.getVelocity();
         double errorTPS = targetTPS - actualTPS;
+        double errorRpm = ticksPerSecondToRpm(errorTPS);
+
+        // Do not carry positive recovery torque past the setpoint. Flywheel inertia
+        // already continues accelerating briefly after the error changes sign.
+        if (errorTPS * lastError < 0.0) {
+            integralSum = 0.0;
+        }
 
         pTerm = kP * errorTPS;
-        integralSum += errorTPS * dt;
-        integralSum = Math.max(-MAX_INTEGRAL_SUM, Math.min(MAX_INTEGRAL_SUM, integralSum));
-        iTerm = kI * integralSum;
-
         double derivative = (errorTPS - lastError) / dt;
         dTerm = kD * derivative;
-
         fTerm = kF * targetTPS;
 
-        double motorPower = pTerm + iTerm + dTerm + fTerm;
+        // Reset stored torque outside the narrow steady-state zone. Inside the
+        // zone, accept integration only when it does not push farther into a
+        // saturated output. This removes the slow +RPM settle after spin-up.
+        if (Math.abs(errorRpm) > INTEGRAL_ZONE_RPM) {
+            integralSum = 0.0;
+        } else {
+            double candidateIntegralSum = clamp(
+                    integralSum + errorTPS * dt,
+                    -MAX_INTEGRAL_SUM, MAX_INTEGRAL_SUM);
+            double candidateITerm = kI * candidateIntegralSum;
+            double candidatePower = pTerm + candidateITerm + dTerm + fTerm;
+            boolean pushesHighSaturation = candidatePower > 1.0 && errorTPS > 0;
+            boolean pushesLowSaturation = candidatePower < 0.0 && errorTPS < 0;
+            if (!pushesHighSaturation && !pushesLowSaturation) {
+                integralSum = candidateIntegralSum;
+            }
+        }
+        iTerm = kI * integralSum;
+
+        boolean transferFeeding = robot.transfer.getPower() > 0.05;
+        recoveryBoostPower = transferFeeding && errorRpm >= FEED_RECOVERY_MIN_ERROR_RPM
+                ? FEED_RECOVERY_POWER_BOOST : 0.0;
+        double motorPower = pTerm + iTerm + dTerm + fTerm + recoveryBoostPower;
         // A flywheel only needs forward power. Negative PID output would actively brake it.
         appliedPower = clamp(motorPower, 0.0, 1.0);
         robot.outtake.setPower(appliedPower);
         lastError = errorTPS;
 
-        double actualRpm = getActualRpm();
+        double actualRpm = ticksPerSecondToRpm(actualTPS);
         if (Math.abs(actualRpm - targetRpm) <= READY_TOLERANCE_RPM) {
             readyLoops++;
         } else {
             readyLoops = 0;
         }
         atSpeed = readyLoops >= READY_STABLE_LOOPS;
-        if (atSpeed) {
-            setIndicator(IndicatorState.READY);
-        } else {
-            setSpinUpIndicator(actualRpm);
-        }
     }
 
     public boolean isAtSpeed() {
@@ -276,6 +280,10 @@ public class shooterSubsystem {
         return fTerm;
     }
 
+    public double getRecoveryBoostPower() {
+        return recoveryBoostPower;
+    }
+
     public double getAppliedPower() {
         return appliedPower;
     }
@@ -295,11 +303,11 @@ public class shooterSubsystem {
         recorder.put("shoot_i", iTerm);
         recorder.put("shoot_d", dTerm);
         recorder.put("shoot_f", fTerm);
+        recorder.put("shoot_recovery_boost", recoveryBoostPower);
         recorder.put("shoot_kp", kP);
         recorder.put("shoot_ki", kI);
         recorder.put("shoot_kd", kD);
         recorder.put("shoot_kf", kF);
-        recorder.put("shoot_led_position", indicatorPosition);
     }
 
     public void stop() {
@@ -308,7 +316,6 @@ public class shooterSubsystem {
         readyLoops = 0;
         atSpeed = false;
         stopFlywheel();
-        setIndicator(IndicatorState.IDLE);
     }
 
     private void stopFlywheel() {
@@ -317,6 +324,7 @@ public class shooterSubsystem {
         iTerm = 0;
         dTerm = 0;
         fTerm = 0;
+        recoveryBoostPower = 0;
         appliedPower = 0;
         resetPID();
     }
@@ -344,46 +352,4 @@ public class shooterSubsystem {
         return Double.isFinite(value) ? Math.max(0, value) : 0;
     }
 
-    private void setIndicator(IndicatorState newState) {
-        indicatorState = newState;
-
-        double position;
-        switch (newState) {
-            case READY:
-                position = LED_GREEN_POSITION;
-                break;
-            case SPINNING_UP:
-                position = LED_RED_POSITION;
-                break;
-            default:
-                position = LED_IDLE_POSITION;
-                break;
-        }
-        writeIndicatorPosition(position);
-    }
-
-    /** Shows spin-up progress across a wide RPM range instead of only red/green. */
-    private void setSpinUpIndicator(double actualRpm) {
-        indicatorState = IndicatorState.SPINNING_UP;
-        double absoluteErrorRpm = Math.abs(targetRpm - actualRpm);
-        double closeness = 1.0 - clamp(
-                absoluteErrorRpm / LED_FULL_SCALE_ERROR_RPM, 0.0, 1.0);
-        closeness = Math.min(closeness, LED_SPIN_UP_MAX_CLOSENESS);
-        double position = LED_RED_POSITION
-                + closeness * (LED_GREEN_POSITION - LED_RED_POSITION);
-        writeIndicatorPosition(position);
-    }
-
-    private void writeIndicatorPosition(double position) {
-        if (robot.shooterLed.isPwmEnabled()
-                && Double.isFinite(indicatorPosition)
-                && Math.abs(position - indicatorPosition) < LED_MIN_POSITION_CHANGE) {
-            return;
-        }
-        indicatorPosition = position;
-        // Cache the intended pulse first, then enable PWM so the light cannot
-        // briefly start at the controller's default/off pulse width.
-        robot.shooterLed.setPosition(position);
-        robot.shooterLed.setPwmEnable();
-    }
 }
