@@ -22,24 +22,13 @@ import static com.pedropathing.ivy.groups.Groups.race;
 import static com.pedropathing.ivy.pedro.PedroCommands.follow;
 @Autonomous(name = "RedAuto (Upward Cell)", group = "Competition")
 public class Red_UpwardCell extends OpMode {
-    // ---- Timing, sized to the 27 s budget (30 s period minus 3 s safety).
-    // ---- Declared int on purpose: an int widens to long or double, so these
-    // ---- compile whatever waitMs() is actually parameterised as (long would not).
     private static final int AIM_WAIT_MS = 2400;
     private static final int SHOT_SETTLE_MS = 200;
     private static final int SHOT_FEED_MS = 1900;
     private static final int COLLECT_MS = 2000;
     private static final int SETTLE_MS = 150;
-    /**
-     * The intake feeds the transfer, so it must run during the shot as well as
-     * while collecting. It is switched on before the first shot and stays on
-     * until the park move, where it is shut down.
-     */
+
     private static final double INTAKE_POWER = 0.85;
-    // ---- Per-path drive timeouts. Roughly 1.6x the expected traversal time, so
-    // ---- a slow-but-working move still finishes, while a real jam fails fast
-    // ---- instead of hanging the routine. Worst case (every move timing out) is
-    // ---- about 32 s, so a timeout here means a mechanical fault, not bad luck.
     private static final int DRIVE_TO_FLOWER1_LINEUP_MS = 3500;
     private static final int DRIVE_TO_FLOWER1_MS = 1500;
     private static final int DRIVE_TO_FLOWER2_LINEUP_MS = 5000;
@@ -58,7 +47,7 @@ public class Red_UpwardCell extends OpMode {
     private final Pose flowerLineupPose = poseFactory.of(7.6, 58.0, 195.3);
     private final Pose flowerPose = poseFactory.of(3.0, 55.9, 189.5);//3.7 x
     private final Pose flower2LineupPose = poseFactory.of(33.3, 124.0, 81.1);
-    private final Pose flowerPose2 = poseFactory.of(31.0, 131.0, 81.5);
+    private final Pose flowerPose2 = poseFactory.of(31.0, 132.0, 81.5);
     private final Pose parkPose = poseFactory.of(2.0, 121.2, 359.7);
     ////    private final Pose flower2LineupPose = poseFactory.of(32.0, 123, 80.5);
     ////    private final Pose flowerPose2 = poseFactory.of(33.0, 130.9, 81.3);
