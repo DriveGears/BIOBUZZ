@@ -56,9 +56,9 @@ public class Red_UpwardCell extends OpMode {
     //Poses
     private final Pose startPose = poseFactory.of(32.0, 9.1, 180);
     private final Pose flowerLineupPose = poseFactory.of(7.6, 58.0, 195.3);
-    private final Pose flowerPose = poseFactory.of(3.7, 55.9, 189.5);
+    private final Pose flowerPose = poseFactory.of(3.0, 55.9, 189.5);//3.7 x
     private final Pose flower2LineupPose = poseFactory.of(33.3, 124.0, 81.1);
-    private final Pose flowerPose2 = poseFactory.of(32.9, 131.0, 81.5);
+    private final Pose flowerPose2 = poseFactory.of(31.0, 131.0, 81.5);
     private final Pose parkPose = poseFactory.of(2.0, 121.2, 359.7);
     ////    private final Pose flower2LineupPose = poseFactory.of(32.0, 123, 80.5);
     ////    private final Pose flowerPose2 = poseFactory.of(33.0, 130.9, 81.3);
@@ -134,34 +134,6 @@ public class Red_UpwardCell extends OpMode {
                 })
         );
     }
-
-    private Command shootAtUpwardCell2() {
-        return sequential(
-                instant(() -> {
-                    shotSkipped = false;
-                    // Intake on: it is what feeds balls into the transfer.
-                    robot.intake.setPower(INTAKE_POWER);
-                    shooter.setTargetRpm(shooterSubsystem.FLOWER_2RPM);
-                    shooter.setShooterEnabled(true);
-                    turret.setAutoAimEnabled(true);
-                }),
-                race(
-                        waitUntil(() -> shooter.isAtSpeed() && turret.isAimReady()),
-                        waitMs(AIM_WAIT_MS)
-                ),
-                // race() completes on the FIRST finisher, so the timeout above
-                // still feeds a shot that is not ready. Record that honestly so
-                // a bad shot is visible instead of silently counted as good.
-                instant(() -> shotSkipped = !(shooter.isAtSpeed() && turret.isAimReady())),
-                waitMs(SHOT_SETTLE_MS),
-                instant(() -> robot.transfer.setPower(1.0)),
-                waitMs(SHOT_FEED_MS),
-                instant(() -> {
-                    robot.transfer.setPower(0);
-                    turret.setAutoAimEnabled(false);
-                })
-        );
-    }
     private Command autoRoutine() {
         return sequential(
                 // 1. At start pose: spin up, aim, shoot the preload.
@@ -200,7 +172,7 @@ public class Red_UpwardCell extends OpMode {
                 instant(() -> turret.setAutoAimEnabled(false)),
                 drive(lineupToFlower2(), DRIVE_TO_FLOWER2_MS),
                 collectFromFlower(),
-                shootAtUpwardCell2(),
+                shootAtUpwardCell(),
                 // 8. Park
                 instant(() -> {
                     shooter.setShooterEnabled(false);

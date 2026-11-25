@@ -27,7 +27,7 @@ public class turretSubsystem {
     // ========================= VALUES TO CALIBRATE =========================
 
     /** Displayed by the test TeleOp so the deployed tuning profile is verifiable. */
-    public static final String TUNE_VERSION = "clean-v9-shooter-height-trim";
+    public static final String TUNE_VERSION = "clean-v8-continuous-side-bank";
 
     /** Limelight AprilTag pipeline number. */
     public static final int APRILTAG_PIPELINE = 1;
@@ -95,7 +95,7 @@ public class turretSubsystem {
      */
     public static double RIGHT_POSITION_AIM_LEFT_IN = 14.0;
     public static double SIDE_AIM_START_RIGHT_IN = 0.0;
-    public static double SIDE_AIM_FULL_RIGHT_IN = 8.2;//8.0
+    public static double SIDE_AIM_FULL_RIGHT_IN = 8.0;
     public static double SIDE_POSITION_FILTER_ALPHA = 0.25;
     public static double BANK_AIM_FILTER_ALPHA = 0.25;
 
@@ -109,16 +109,6 @@ public class turretSubsystem {
     public static final double CLUSTER_AIM_POINT_FORWARD_OF_TAGS_IN = 7.1874;
     /** Official SDK Z offset: tag centers are this far below the opening origin. */
     public static final double CLUSTER_AIM_POINT_ABOVE_TAGS_IN = 5.622;
-
-    /**
-     * Fixed bias added to the range handed to the shooter RPM table.
-     * The ball currently lands ~5 cm (2 in) low at every distance, i.e. a
-     * constant energy deficit rather than a range-calibration error, so a
-     * fixed trim is the right shape: positive -> the table thinks the hive
-     * is farther away -> more flywheel RPM -> higher impact point.
-     * Tune in 1 in steps; set to 0 to disable.
-     */
-    public static double SHOOTER_DISTANCE_TRIM_IN = 6.75;//6.25
 
     /**
      * Clean PID starting point for the rebuilt mechanism. These are deliberately
@@ -718,8 +708,6 @@ public class turretSubsystem {
         r.put("vis_stable_frames", stableAimFrames);
         r.put("vis_geometry_ok", clusterGeometryValid);
         r.put("vis_dist_in", filteredDistanceIn);
-        r.put("shoot_dist_in", getShooterDistanceIn());
-        r.put("shoot_dist_trim_in", SHOOTER_DISTANCE_TRIM_IN);
         r.put("vis_target_age_ms", Math.min(getTargetAgeMs(), 99999));
 
         r.put("aim_ready", aimReady);
@@ -1944,18 +1932,13 @@ public class turretSubsystem {
      * odometry updates its distance every loop and carries it through brief occlusion.
      */
     public double getShooterDistanceIn() {
-        double distanceIn;
         if (hasFusedDistance()
                 && (!distanceInitialized
                 || !targetVisible
                 || Math.abs(fusDistanceIn - filteredDistanceIn) <= FUSION_REJECT_IN)) {
-            distanceIn = fusDistanceIn;
-        } else {
-            distanceIn = filteredDistanceIn;
+            return fusDistanceIn;
         }
-        // Never let the trim turn "no range yet" (0) into a real command.
-        if (!(distanceIn > 0)) return distanceIn;
-        return Math.min(distanceIn + SHOOTER_DISTANCE_TRIM_IN, MAX_DISTANCE_IN);
+        return filteredDistanceIn;
     }
     public double getRobotForwardVelocityInPerSec() { return robotForwardVelocityInPerSec; }
     public double getRobotLeftVelocityInPerSec() { return robotLeftVelocityInPerSec; }
