@@ -18,6 +18,8 @@ public class shooterSubsystem {
     /** Normal field baseline used as a reference for the calibrated table below. */
     public static final double COMPETITION_RPM = 3000;
 
+    public static final double AUTO_RPM = 3025;
+
     /**
      * Exponential-like calibration: RPM rises gently through normal shooting
      * positions, then the slope increases toward the far corners. Linear interpolation
