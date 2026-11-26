@@ -53,7 +53,7 @@ public class turretTest extends LinearOpMode {
         telemetry.addLine("G1 Left Stick: Drive | Right Trigger: Hold Auto-Aim");
         telemetry.addLine("G1 D-pad L/R: Manual Turret | A: Toggle Shooter/Intakes | B: Stop");
         telemetry.addLine("Click BOTH sticks: set current turret angle to zero");
-        telemetry.addLine("LED: white=manual, red=aligning, green=locked");
+        telemetry.addLine("LED: blue=manual, red=aligning, yellow=odometry lock, green=live vision lock");
         turretSubsystem.Alliance testAlliance = turretSubsystem.Alliance.BLUE;
         while (!isStarted() && !isStopRequested()) {
             if (gamepad1.x) testAlliance = turretSubsystem.Alliance.RED;

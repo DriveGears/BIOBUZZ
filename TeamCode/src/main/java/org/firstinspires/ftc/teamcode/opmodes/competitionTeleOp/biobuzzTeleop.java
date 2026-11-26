@@ -364,6 +364,6 @@ public abstract class biobuzzTeleop extends LinearOpMode {
         telemetry.addLine("LB (tap): Toggle auto/manual (starts AUTO)");
         telemetry.addLine("D-pad L/R: Move turret while in manual mode");
         telemetry.addLine("Auto-aim moves turret only; right stick owns chassis turn");
-        telemetry.addLine("LED: white=manual, red=aligning, green=locked");
+        telemetry.addLine("LED: blue=manual, red=aligning, yellow=odometry lock, green=live vision lock");
     }
 }

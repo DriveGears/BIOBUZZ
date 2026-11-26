@@ -245,10 +245,20 @@ public class turretSubsystem {
     private static final double MAX_TARGET_RATE_DEG_PER_SEC = 60.0;
     private static final double EXTRA_LATENCY_MS = 10.0;
     private static final double ENCODER_HISTORY_MS = 400.0;
-    // goBILDA RGB Indicator Light: white=manual/off, red=aligning, green=locked.
-    private static final double LED_MANUAL_POSITION = 1.000;
-    private static final double LED_ALIGNING_POSITION = 0.300;
-    private static final double LED_LOCKED_POSITION = 0.500;
+    /**
+     * goBILDA RGB Indicator Light solid colors. With the configured 500-2500 us
+     * servo range, its solid-color hue band is 1050-1950 us. Keeping every state
+     * inside that band prevents the light from selecting an off/animation region.
+     *
+     * Blue   = manual aim
+     * Red    = auto aim is not settled
+     * Yellow = settled using saved odometry target; no live Limelight confidence
+     * Green  = settled with a stable live Limelight target
+     */
+    public static final double LED_MANUAL_POSITION = 0.575;       // 1650 us: blue
+    private static final double LED_ALIGNING_POSITION = 0.275;    // 1050 us: red
+    private static final double LED_ODOMETRY_POSITION = 0.350;    // 1200 us: yellow
+    private static final double LED_VISION_LOCK_POSITION = 0.425; // 1350 us: green
     private static final double LED_MIN_POSITION_CHANGE = 0.004;
 
     private final Hardware robot;
@@ -1348,9 +1358,18 @@ public class turretSubsystem {
     }
 
     private void updateIndicator() {
-        double position = !autoAimEnabled
-                ? LED_MANUAL_POSITION
-                : aimReady ? LED_LOCKED_POSITION : LED_ALIGNING_POSITION;
+        double position;
+        if (!autoAimEnabled) {
+            position = LED_MANUAL_POSITION;
+        } else if (aimReady && targetVisible) {
+            // Green is reserved for a stable, currently visible Limelight target.
+            position = LED_VISION_LOCK_POSITION;
+        } else if (aimReady && odometryTrackingActive) {
+            // The turret is settled, but the target is only being carried by odometry.
+            position = LED_ODOMETRY_POSITION;
+        } else {
+            position = LED_ALIGNING_POSITION;
+        }
         writeIndicatorPosition(position);
     }
 
