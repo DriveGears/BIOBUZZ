@@ -48,7 +48,7 @@ public class Red_UpwardCell extends OpMode {
     private final Pose flowerPose = poseFactory.of(4.5, 55.9, 189.5);//x=3
     private final Pose flower2LineupPose = poseFactory.of(33.3, 126.0, 81.1); //y=124
 //    private final Pose flowerPose2 = poseFactory.of(31.5, 131.8, 81.5);og
-    private final Pose flowerPose2 = poseFactory.of( 31.5, 130.09, 80.04); //35.35 too far right
+    private final Pose flowerPose2 = poseFactory.of( 33.2, 130.09, 80.04); //35.35 too far right
 
     private final Pose parkPose = poseFactory.of(2.0, 121.2, 359.7);
 

@@ -16,9 +16,9 @@ public class shooterSubsystem {
     public static final double MOTOR_REVS_PER_OUTTAKE_REV = 1.0;
 
     /** Normal field baseline used as a reference for the calibrated table below. */
-    public static final double COMPETITION_RPM = 3000;
+    public static final double COMPETITION_RPM = 2900;
 
-    public static final double AUTO_RPM = 3100;
+    public static final double AUTO_RPM = 2900;
 
     /**
      * Exponential-like calibration: RPM rises gently through normal shooting
@@ -26,10 +26,10 @@ public class shooterSubsystem {
      * between these points approximates the curve without adding another tuning model.
      */
     public static final double[] SHOT_DISTANCE_IN = {
-            60, 90, 100, 120, 160, 180
+            60, 100, 130, 215
     };
     public static final double[] SHOT_RPM = {
-            2950, 2950, 3000, 3050, 3050, 3075
+            3050, 3100, 3100, 3200
     };
 
     // Competition PIDF defaults (RUN_WITHOUT_ENCODER motor mode).

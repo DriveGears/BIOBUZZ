@@ -56,8 +56,8 @@ public final class OdometryConfig {
      * error of about atan(offset/distance) into any odometry-aided aiming
      * (4 in at 60 in range = 3.8 deg). MEASURE THIS with a tape measure.
      */
-    public static final double TURRET_PIVOT_FORWARD_IN = 0.0;
-    public static final double TURRET_PIVOT_LEFT_IN = 0.0;
+    public static double TURRET_PIVOT_FORWARD_IN = 0.0;
+    public static double TURRET_PIVOT_LEFT_IN = 0.0;
 
     /** Ticks per mm in force: Pedro's ticksPerUnit override if set, else the factory value. */
     public static double activeTicksPerMm() {

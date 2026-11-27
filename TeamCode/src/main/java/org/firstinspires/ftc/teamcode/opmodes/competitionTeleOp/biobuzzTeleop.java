@@ -24,6 +24,10 @@ public abstract class biobuzzTeleop extends LinearOpMode {
     private static final double DRIVE_STICK_DEADBAND = 0.05;
     private static final double DASHBOARD_PERIOD_SECONDS = 0.050;
     private static final double OUTTAKE_CURRENT_SAMPLE_SECONDS = 0.100;
+    /** Pedro/Pinpoint field frame is 0..144 inches along Y. */
+    private static final double FIELD_CENTER_Y_IN = 72.0;
+    /** Prevent odometry noise near midfield from switching sides repeatedly. */
+    private static final double FIELD_SIDE_HYSTERESIS_IN = 6.0;
 
     private FlightRecorder rec;
     private turretSubsystem turret;
@@ -39,7 +43,11 @@ public abstract class biobuzzTeleop extends LinearOpMode {
     private boolean lastRightTrigger = false;
     private boolean lastLeftTrigger = false;
     private boolean lastLeftBumper = false;
+    private boolean lastTurretZeroButton = false;
+    private boolean lastRescanButton = false;
     private boolean autoAimEnabled = true;
+    /** -1 = lower-Y half, +1 = upper-Y half, 0 = not initialized yet. */
+    private int trackedFieldSide = 0;
 
     protected abstract turretSubsystem.Alliance competitionAlliance();
 
@@ -101,6 +109,8 @@ public abstract class biobuzzTeleop extends LinearOpMode {
         lastRightTrigger = gamepad1.right_trigger > 0.5;
         lastLeftTrigger = gamepad1.left_trigger > 0.5;
         lastLeftBumper = gamepad1.left_bumper;
+        lastTurretZeroButton = gamepad1.start;
+        lastRescanButton = gamepad1.y;
 
         try {
             while (opModeIsActive()) {
@@ -149,12 +159,33 @@ public abstract class biobuzzTeleop extends LinearOpMode {
                     autoAimEnabled = !autoAimEnabled;
                 }
                 lastLeftBumper = currentLeftBumper;
+
+                // START only redefines the current physical turret position as zero.
+                // It preserves whichever auto/manual mode the driver already selected.
+                boolean turretZeroPressed = gamepad1.start;
+                if (turretZeroPressed && !lastTurretZeroButton) {
+                    turret.zeroAtCurrentPosition();
+                    rec.event("TURRET_ZERO raw=" + robot.getTurretRawEncoderTicks()
+                            + " zero=" + robot.getTurretEncoderZeroTicks());
+                }
+                lastTurretZeroButton = turretZeroPressed;
                 turret.setAutoAimEnabled(autoAimEnabled);
+
+                boolean rescanPressed = gamepad1.y;
+                if (rescanPressed && !lastRescanButton) {
+                    autoAimEnabled = true;
+                    turret.beginFullRangeRescan();
+                }
+                lastRescanButton = rescanPressed;
+
+                boolean turretPaused = gamepad1.back;
+                turret.setMovementPaused(turretPaused);
 
                 double manualTurretCommand = (gamepad1.dpad_right ? 1.0 : 0.0)
                         - (gamepad1.dpad_left ? 1.0 : 0.0);
                 turret.setManualPower(manualTurretCommand * MANUAL_TURRET_POWER);
                 turret.update(dtSeconds);
+                updateAutomaticFieldHandoff();
 
                 // Keep readiness as telemetry for the driver/log, but A always owns
                 // forward transfer directly. The driver decides when to release a shot.
@@ -199,6 +230,9 @@ public abstract class biobuzzTeleop extends LinearOpMode {
                 rec.put("in_lateral", lateral);
                 rec.put("in_turn", turn);
                 rec.put("in_autoaim", autoAimEnabled);
+                rec.put("in_turret_paused", turretPaused);
+                rec.put("in_rescan", rescanPressed);
+                rec.put("field_side", trackedFieldSide);
                 rec.put("in_dpad_manual", manualTurretCommand);
                 rec.put("in_intake_on", intakeToggle);
                 rec.put("in_outtake_on", outtakeToggle);
@@ -215,6 +249,16 @@ public abstract class biobuzzTeleop extends LinearOpMode {
                         transferCommand, transferRpm);
 
                 telemetry.addData("Turret Mode", autoAimEnabled ? "AUTO-AIM" : "MANUAL");
+                telemetry.addData("Turret Pause", turretPaused
+                        ? "HELD - tracking continues, motor stopped" : "released");
+                telemetry.addData("Turret Rescan", turret.isRescanActive()
+                        ? "SEARCHING FULL SAFE RANGE" : "inactive");
+                telemetry.addData("Automatic Field Handoff", turret.isFieldHandoffActive()
+                        ? "TURNING 180" : "ready");
+                telemetry.addData("Tracked Field Side", trackedFieldSide < 0
+                        ? "LOW-Y" : trackedFieldSide > 0 ? "HIGH-Y" : "INITIALIZING");
+                telemetry.addData("Aim Source", "%s (%s)",
+                        turret.getTrackingState(), turret.getTrackingStateReason());
                 telemetry.addData("Target Visible", turret.hasTarget()
                         ? "YES (ID: " + turret.getSelectedTagId() + ")"
                         : turret.isOdometryTrackingActive()
@@ -228,9 +272,13 @@ public abstract class biobuzzTeleop extends LinearOpMode {
                         turret.getCurrentTicks(), turret.getTargetTicks(),
                         turretSubsystem.MIN_TURRET_TICKS,
                         turretSubsystem.MAX_TURRET_TICKS);
-                telemetry.addData("Turret Raw / Zero", "%d / %d",
-                        robot.getTurretRawEncoderTicks(),
+                telemetry.addData("Turret Encoder", "relative=%d = raw %d - saved zero %d",
+                        turret.getCurrentTicks(), robot.getTurretRawEncoderTicks(),
                         robot.getTurretEncoderZeroTicks());
+                telemetry.addData("Turret Safety", turret.hasHardLimitFault()
+                        ? "HARD LIMIT: auto blocked; use manual only toward center, then START"
+                        : "relative limits OK");
+                telemetry.addData("Turret Zero", "press START only while mechanically centered");
                 telemetry.addData("Allowed visible IDs", turret.getVisibleTagIds());
                 telemetry.addData("Alliance / CELL", "%s / %s",
                         turret.getAlliance(), turret.getSelectedClusterName());
@@ -240,6 +288,14 @@ public abstract class biobuzzTeleop extends LinearOpMode {
                 telemetry.addData("Side Aim", "camera=%+.1f shooter=%+.1f, offset=%+.1f in (%+.2f deg)",
                         turret.getCameraSideOfClusterIn(), turret.getShooterSideOfClusterIn(),
                         turret.getBankAimOffsetIn(), turret.getBankAimCorrectionDeg());
+                telemetry.addData("Bank Target", "%s side of hive",
+                        turret.getBankAimSide());
+                telemetry.addData("Bank Switch Guard", "cross=%.1f in hold=%.0f ms remaining=%.0f ms",
+                        turretSubsystem.BANK_AIM_SWITCH_HYSTERESIS_IN,
+                        turretSubsystem.BANK_AIM_SWITCH_HOLD_MS,
+                        turret.getBankAimSwitchRemainingMs());
+                telemetry.addData("RGB Command", "position=%.3f, pulse=%.0f us",
+                        turret.getIndicatorPosition(), turret.getIndicatorPulseUs());
                 double shooterDistanceIn = turret.getShooterDistanceIn();
                 telemetry.addData("Shooter Range",
                         turret.hasDistance() && Double.isFinite(shooterDistanceIn)
@@ -248,10 +304,17 @@ public abstract class biobuzzTeleop extends LinearOpMode {
                                 : "NO VALID RANGE (RPM fallback active)");
                 telemetry.addData("Range Source",
                         turret.hasDistance() && Double.isFinite(shooterDistanceIn)
-                                ? turret.hasTarget() ? "LIVE TAG" : "HELD ODOMETRY"
+                                ? turret.hasFusedDistance()
+                                  ? turret.hasTarget()
+                                    ? "FUSED (VISION-CORRECTED)"
+                                    : "ODOMETRY TARGET MEMORY"
+                                  : "FILTERED LIVE VISION"
                                 : turret.hasTarget()
                                   ? "TAG VISIBLE; CAMERA GEOMETRY INVALID"
                                   : "NO ALLOWED TAG");
+                telemetry.addData("Range Protection", "shotFreeze=%s raw=%.1f disagreement=%+.1f in",
+                        turret.isDistanceFrozenAfterShot(), turret.getRawDistanceIn(),
+                        turret.getRangeDisagreementIn());
                 telemetry.addData("Chassis Aim Assist", "DISABLED");
                 telemetry.addData("Aim Ready?", turret.isAimReady() ? "READY" : "ALIGNING");
                 telemetry.addData("Intake Toggle", intakeToggle ? "ON" : "OFF");
@@ -328,15 +391,22 @@ public abstract class biobuzzTeleop extends LinearOpMode {
         packet.put("turret.power", turret.getAppliedPower());
         packet.put("turret.tx_deg", turret.getFilteredTxDeg());
         packet.put("turret.aim_ready", turret.isAimReady() ? 1.0 : 0.0);
+        packet.put("turret.paused",
+                turret.getTrackingState() == turretSubsystem.TrackingState.PAUSED ? 1.0 : 0.0);
         packet.put("turret.target_visible", turret.hasTarget() ? 1.0 : 0.0);
         packet.put("turret.field_memory_valid", turret.hasFieldTargetMemory() ? 1.0 : 0.0);
+        packet.put("turret.hard_limit_fault", turret.hasHardLimitFault() ? 1.0 : 0.0);
         packet.put("turret.odometry_pose_valid", turret.isOdometryPoseValid() ? 1.0 : 0.0);
         packet.put("turret.range_valid", turret.hasDistance() ? 1.0 : 0.0);
         packet.put("turret.selected_tag_id", turret.getSelectedTagId());
         packet.put("turret.cluster_first_id", turret.getSelectedClusterFirstId());
         putIfFinite(packet, "turret.distance_in", turret.getDistanceIn());
+        putIfFinite(packet, "turret.raw_distance_in", turret.getRawDistanceIn());
         putIfFinite(packet, "turret.fused_distance_in", turret.getFusedDistanceIn());
         putIfFinite(packet, "turret.shooter_distance_in", turret.getShooterDistanceIn());
+        putIfFinite(packet, "turret.range_disagreement_in", turret.getRangeDisagreementIn());
+        packet.put("turret.distance_shot_freeze",
+                turret.isDistanceFrozenAfterShot() ? 1.0 : 0.0);
         packet.put("turret.fused_distance_valid", turret.hasFusedDistance() ? 1.0 : 0.0);
         packet.put("turret.robot_speed_in_s", turret.getRobotSpeedInPerSec());
         packet.put("turret.geometry_valid", turret.isClusterGeometryValid() ? 1.0 : 0.0);
@@ -344,6 +414,42 @@ public abstract class biobuzzTeleop extends LinearOpMode {
         packet.put("loop.ms", dtSeconds * 1000.0);
 
         dashboard.sendTelemetryPacket(packet);
+    }
+
+    /** Automatically changes CELL when accepted odometry crosses the field center. */
+    private void updateAutomaticFieldHandoff() {
+        if (!turret.isOdometryPoseValid()) return;
+
+        double y = turret.getRobotFieldYIn();
+        int observedSide;
+        if (y < FIELD_CENTER_Y_IN - FIELD_SIDE_HYSTERESIS_IN) {
+            observedSide = -1;
+        } else if (y > FIELD_CENTER_Y_IN + FIELD_SIDE_HYSTERESIS_IN) {
+            observedSide = 1;
+        } else {
+            // Stay on the previous side inside the 12-inch center guard band.
+            return;
+        }
+
+        if (trackedFieldSide == 0) {
+            trackedFieldSide = observedSide;
+            rec.event(String.format(java.util.Locale.US,
+                    "FIELD_SIDE_INIT side=%+d y=%.1f", trackedFieldSide, y));
+            return;
+        }
+        if (observedSide == trackedFieldSide) return;
+
+        int previousSide = trackedFieldSide;
+        trackedFieldSide = observedSide;
+        rec.event(String.format(java.util.Locale.US,
+                "FIELD_SIDE_CROSS old=%+d new=%+d y=%.1f",
+                previousSide, trackedFieldSide, y));
+
+        // A driver-requested recovery scan already owns the turret. Record the
+        // new side, but do not interrupt that safer search.
+        if (turret.isRescanActive()) return;
+        autoAimEnabled = true;
+        turret.beginOppositeFieldHandoff();
     }
 
     private void putIfFinite(TelemetryPacket packet, String key, double value) {
@@ -362,7 +468,10 @@ public abstract class biobuzzTeleop extends LinearOpMode {
         telemetry.addLine("RT (tap): Toggle intake | RB (hold): Reverse intake");
         telemetry.addLine("LT (tap): Toggle flywheel | A (hold): Transfer forward | X (hold): Reverse transfer");
         telemetry.addLine("LB (tap): Toggle auto/manual (starts AUTO)");
+        telemetry.addLine("Y (tap): discard hive memory and rescan full safe turret range");
         telemetry.addLine("D-pad L/R: Move turret while in manual mode");
+        telemetry.addLine("BACK (hold): pause turret movement while tracking continues");
+        telemetry.addLine("START: set current turret position to 0 (mode unchanged)");
         telemetry.addLine("Auto-aim moves turret only; right stick owns chassis turn");
         telemetry.addLine("LED: blue=manual, red=aligning, yellow=odometry lock, green=live vision lock");
     }

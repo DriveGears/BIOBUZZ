@@ -21,6 +21,7 @@ public class ManualTeleop extends LinearOpMode {
     private boolean shooterToggle;
     private boolean lastRightTrigger;
     private boolean lastLeftTrigger;
+    private boolean lastTurretZeroButton;
 
     @Override
     public void runOpMode() {
@@ -31,8 +32,8 @@ public class ManualTeleop extends LinearOpMode {
         ElapsedTime loopTimer = new ElapsedTime();
 
         stopMechanisms(robot, shooter);
-        robot.shooterLed.setPosition(turretSubsystem.LED_MANUAL_POSITION);
         robot.shooterLed.setPwmEnable();
+        robot.shooterLed.setPosition(turretSubsystem.LED_MANUAL_POSITION);
         robot.enableManualBulkReads();
         telemetry.setMsTransmissionInterval(100);
 
@@ -52,6 +53,7 @@ public class ManualTeleop extends LinearOpMode {
         loopTimer.reset();
         lastRightTrigger = gamepad1.right_trigger > 0.5;
         lastLeftTrigger = gamepad1.left_trigger > 0.5;
+        lastTurretZeroButton = gamepad1.start;
 
         try {
             while (opModeIsActive()) {
@@ -81,6 +83,13 @@ public class ManualTeleop extends LinearOpMode {
                     robot.transfer.setPower(0);
                 }
 
+                boolean turretZeroPressed = gamepad1.start;
+                if (turretZeroPressed && !lastTurretZeroButton) {
+                    robot.turret.setPower(0);
+                    robot.setTurretCurrentPositionAsZero();
+                }
+                lastTurretZeroButton = turretZeroPressed;
+
                 double turretCommand = (gamepad1.dpad_right ? 1.0 : 0.0)
                         - (gamepad1.dpad_left ? 1.0 : 0.0);
                 int turretTicks = robot.getTurretPositionTicks();
@@ -93,6 +102,16 @@ public class ManualTeleop extends LinearOpMode {
                         turretTicks, turretPower,
                         turretSubsystem.MIN_TURRET_TICKS,
                         turretSubsystem.MAX_TURRET_TICKS);
+                telemetry.addData("Turret Encoder", "relative=%d = raw %d - saved zero %d",
+                        turretTicks, robot.getTurretRawEncoderTicks(),
+                        robot.getTurretEncoderZeroTicks());
+                boolean hardLimitFault = turretTicks < turretSubsystem.MIN_TURRET_TICKS
+                        - turretSubsystem.HARD_LIMIT_OVERRUN_TICKS
+                        || turretTicks > turretSubsystem.MAX_TURRET_TICKS
+                        + turretSubsystem.HARD_LIMIT_OVERRUN_TICKS;
+                telemetry.addData("Turret Safety", hardLimitFault
+                        ? "HARD LIMIT: manual movement allowed only toward center, then START"
+                        : "relative limits OK");
                 telemetry.addData("Intake", intakeToggle ? "ON" : "OFF");
                 telemetry.addData("Shooter RPM", "target=%.0f actual=%.0f %s",
                         shooter.getTargetRpm(), shooter.getActualRpm(),
@@ -139,6 +158,14 @@ public class ManualTeleop extends LinearOpMode {
 
     private static double limitTurretAtSoftStops(double power, int currentTicks) {
         double tickDirection = turretSubsystem.MOTOR_DIRECTION_SIGN * power;
+        if (currentTicks < turretSubsystem.MIN_TURRET_TICKS
+                - turretSubsystem.HARD_LIMIT_OVERRUN_TICKS) {
+            return tickDirection > 0 ? power : 0.0;
+        }
+        if (currentTicks > turretSubsystem.MAX_TURRET_TICKS
+                + turretSubsystem.HARD_LIMIT_OVERRUN_TICKS) {
+            return tickDirection < 0 ? power : 0.0;
+        }
         if (currentTicks >= turretSubsystem.MAX_TURRET_TICKS && tickDirection > 0) {
             return 0.0;
         }
@@ -164,6 +191,8 @@ public class ManualTeleop extends LinearOpMode {
         telemetry.addLine("=== GAMEPAD 1 CONTROLS ===");
         telemetry.addLine("Left Stick: Drive/strafe | Right Stick X: Turn");
         telemetry.addLine("D-pad L/R (hold): Move turret manually");
+        telemetry.addLine("START: set current turret position to 0");
+        telemetry.addLine("Zero only while the turret is mechanically centered");
         telemetry.addLine("RT (tap): Toggle intake | RB (hold): Reverse intake");
         telemetry.addLine("LT (tap): Toggle flywheel | A (hold): Transfer forward");
         telemetry.addLine("X (hold): Reverse transfer");

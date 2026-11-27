@@ -25,6 +25,9 @@ import java.util.OptionalDouble;
 
 public class Hardware {
 
+    public static final double SHOOTER_LED_PWM_MIN_US = 600.0;
+    public static final double SHOOTER_LED_PWM_MAX_US = 2400.0;
+
     private static Hardware instance;
     public final DcMotorEx lf;
     public final DcMotorEx rf;
@@ -35,10 +38,6 @@ public class Hardware {
     public final DcMotorEx transfer;
     public final DcMotorEx turret;
     public final ServoImplEx shooterLed;
-
-    /** Raw encoder count captured while the turret is centered during INIT. */
-    private int turretEncoderZeroTicks;
-    private static int sharedTurretEncoderZeroTicks = Integer.MIN_VALUE;
 
     private final List<LynxModule> hubs;
     private VoltageSensor batterySensor;
@@ -96,8 +95,11 @@ public class Hardware {
         transfer.setZeroPowerBehavior(DcMotorEx.ZeroPowerBehavior.BRAKE);
         turret.setZeroPowerBehavior(DcMotorEx.ZeroPowerBehavior.BRAKE);
 
-        // goBILDA 3118-0808-0002 RGB Indicator Light uses the full servo PWM range.
-        shooterLed.setPwmRange(new PwmControl.PwmRange(500, 2500));
+        // Keep the goBILDA RGB indicator on the FTC servo convention. Its useful
+        // solid-color band is roughly 1100-1900 us; the wider 500-2500 us range
+        // made low position values (especially red) fall into the OFF region.
+        shooterLed.setPwmRange(new PwmControl.PwmRange(
+                SHOOTER_LED_PWM_MIN_US, SHOOTER_LED_PWM_MAX_US));
 
         for (VoltageSensor sensor : hwMap.voltageSensor) {
             batterySensor = sensor;
@@ -107,11 +109,6 @@ public class Hardware {
         // Position and velocity remain readable in this mode. The turret uses
         // its own software PID, so do not layer the hub's velocity PID on top.
         turret.setMode(DcMotorEx.RunMode.RUN_WITHOUT_ENCODER);
-        if (sharedTurretEncoderZeroTicks == Integer.MIN_VALUE) {
-            setTurretCurrentPositionAsZero();
-        } else {
-            turretEncoderZeroTicks = sharedTurretEncoderZeroTicks;
-        }
 
         try {
             configureOdometry();
@@ -325,13 +322,14 @@ public class Hardware {
      * Only call this while the turret is known to be mechanically centered.
      */
     public void setTurretCurrentPositionAsZero() {
-        turretEncoderZeroTicks = turret.getCurrentPosition();
-        sharedTurretEncoderZeroTicks = turretEncoderZeroTicks;
+        turret.setPower(0);
+        turret.setMode(DcMotor.RunMode.STOP_AND_RESET_ENCODER);
+        turret.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
     }
 
-    /** Returns turret encoder ticks relative to the center captured during INIT. */
+    /** Returns hardware-relative ticks; zero survives normal OpMode transitions. */
     public int getTurretPositionTicks() {
-        return turret.getCurrentPosition() - turretEncoderZeroTicks;
+        return turret.getCurrentPosition();
     }
 
     /** Exposed for diagnostics; control code should use getTurretPositionTicks(). */
@@ -340,7 +338,7 @@ public class Hardware {
     }
 
     public int getTurretEncoderZeroTicks() {
-        return turretEncoderZeroTicks;
+        return 0;
     }
 
 }

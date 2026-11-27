@@ -168,12 +168,17 @@ public class ShooterRpmTester extends LinearOpMode {
                 telemetry.addData("Selected Alliance", turret.getAlliance());
                 telemetry.addData("Visible Tags", "%s", turret.getVisibleTagIds());
                 telemetry.addData("TARGET DISTANCE", formatUsedDistance(turret));
+                telemetry.addData("Raw Vision Distance", formatDistance(
+                        turret.getRawDistanceIn()));
                 telemetry.addData("Tracked Distance", formatDistance(
                         turret.hasDistance() ? turret.getDistanceIn() : Double.NaN));
                 telemetry.addData("Fused Distance", turret.hasFusedDistance()
                         ? formatDistance(turret.getFusedDistanceIn())
                         : "N/A (vision distance is still usable)");
                 telemetry.addData("Distance Status", distanceStatus(turret));
+                telemetry.addData("Range Protection", "shotFreeze=%s disagreement=%+.1f in",
+                        turret.isDistanceFrozenAfterShot(),
+                        turret.getRangeDisagreementIn());
                 telemetry.addLine();
                 telemetry.addData("Transfer Status", transferFeeding ? "FEEDING" : "OFF");
                 telemetry.addData("Transfer Target RPM", "%.0f", targetTransferRpm);
@@ -204,10 +209,15 @@ public class ShooterRpmTester extends LinearOpMode {
 
                     putIfFinite(packet, "distance.used_in",
                             turret.hasDistance() ? turret.getShooterDistanceIn() : Double.NaN);
+                    putIfFinite(packet, "distance.raw_vision_in", turret.getRawDistanceIn());
                     putIfFinite(packet, "distance.tracked_in",
                             turret.hasDistance() ? turret.getDistanceIn() : Double.NaN);
                     putIfFinite(packet, "distance.fused_in",
                             turret.hasFusedDistance() ? turret.getFusedDistanceIn() : Double.NaN);
+                    putIfFinite(packet, "distance.vision_minus_fused_in",
+                            turret.getRangeDisagreementIn());
+                    packet.put("distance.shot_freeze",
+                            turret.isDistanceFrozenAfterShot() ? 1.0 : 0.0);
                     packet.put("vision.target_visible", turret.hasTarget() ? 1.0 : 0.0);
                     packet.put("vision.tx_deg", turret.getFilteredTxDeg());
                     packet.put("vision.selected_tag_id", turret.getSelectedTagId());
@@ -244,7 +254,13 @@ public class ShooterRpmTester extends LinearOpMode {
 
     private String distanceStatus(turretSubsystem turret) {
         if (turret.hasDistance() && Double.isFinite(turret.getShooterDistanceIn())) {
-            return turret.hasTarget() ? "LIVE TAG RANGE" : "HELD ODOMETRY RANGE";
+            if (turret.isDistanceFrozenAfterShot()) return "SHOT HOLD: LAST TRUSTED RANGE";
+            if (turret.hasFusedDistance()) {
+                return turret.hasTarget()
+                        ? "FUSED RANGE (VISION + ODOMETRY)"
+                        : "ODOMETRY-TRACKED RANGE";
+            }
+            return "FILTERED VISION RANGE";
         }
         if (turret.hasTarget()) {
             return "TAG FOUND, BUT CAMERA HEIGHT/ANGLE DID NOT PRODUCE A RANGE";
