@@ -44,10 +44,12 @@ public class Red_UpwardCell extends OpMode {
     private final PoseFactory poseFactory = PoseFactory.degrees();
     //Poses
     private final Pose startPose = poseFactory.of(32.0, 9.1, 180);
-    private final Pose flowerLineupPose = poseFactory.of(7.6, 58.0, 195.3);
-    private final Pose flowerPose = poseFactory.of(3.0, 55.9, 189.5);
-    private final Pose flower2LineupPose = poseFactory.of(33.3, 124.0, 81.1);
-    private final Pose flowerPose2 = poseFactory.of(31.5, 131.8, 81.5);
+    private final Pose flowerLineupPose = poseFactory.of(11.6, 55, 195.3); //x = 7.6, y, 58
+    private final Pose flowerPose = poseFactory.of(4.5, 55.9, 189.5);//x=3
+    private final Pose flower2LineupPose = poseFactory.of(33.3, 126.0, 81.1); //y=124
+//    private final Pose flowerPose2 = poseFactory.of(31.5, 131.8, 81.5);og
+    private final Pose flowerPose2 = poseFactory.of( 31.5, 130.09, 80.04); //35.35 too far right
+
     private final Pose parkPose = poseFactory.of(2.0, 121.2, 359.7);
 
     // Path methods
