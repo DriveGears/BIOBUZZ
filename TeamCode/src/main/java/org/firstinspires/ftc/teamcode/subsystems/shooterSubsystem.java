@@ -26,10 +26,10 @@ public class shooterSubsystem {
      * between these points approximates the curve without adding another tuning model.
      */
     public static final double[] SHOT_DISTANCE_IN = {
-            60, 100, 130, 215
+            95, 115, 140, 180
     };
     public static final double[] SHOT_RPM = {
-            3050, 3100, 3100, 3200
+            2875, 2900, 2900, 3100
     };
 
     // Competition PIDF defaults (RUN_WITHOUT_ENCODER motor mode).

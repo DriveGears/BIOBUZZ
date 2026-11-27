@@ -98,7 +98,7 @@ public class turretTest extends LinearOpMode {
         }
         telemetry.addLine("BioBuzz TeleOp Ready");
         addControlsTelemetry();
-        telemetry.addLine("LED: blue=manual, red=aligning, yellow=odometry lock, green=live vision lock");
+        telemetry.addLine("LED: blue=manual, red=aligning, yellow=landmark/odometry lock, green=direct target lock");
         turretSubsystem.Alliance testAlliance = turretSubsystem.Alliance.BLUE;
         while (!isStarted() && !isStopRequested()) {
             if (gamepad1.x) testAlliance = turretSubsystem.Alliance.RED;
@@ -214,8 +214,6 @@ public class turretTest extends LinearOpMode {
 
                 // Do not allow auto aim in the same loop as a zero operation.
                 boolean autoAim = gamepad1.right_trigger > 0.20 && !turretZeroPressed;
-                boolean turretPaused = gamepad1.back;
-                turret.setMovementPaused(turretPaused);
                 double manualTurret = (gamepad1.dpad_right ? 1.0 : 0.0) - (gamepad1.dpad_left ? 1.0 : 0.0);
                 turret.update(dtSeconds, autoAim,
                         manualTurret * MANUAL_TURRET_POWER);
@@ -227,7 +225,6 @@ public class turretTest extends LinearOpMode {
                 rec.put("in_strafe", strafe);
                 rec.put("in_turn", turn);
                 rec.put("in_autoaim", autoAim);
-                rec.put("in_turret_paused", turretPaused);
                 rec.put("in_dpad_manual", manualTurret);
                 rec.put("tune_calibration_index", selectedCalibration.ordinal());
                 rec.put("tune_calibration_value",
@@ -245,8 +242,6 @@ public class turretTest extends LinearOpMode {
                         turret.getUpdateMicros());
                 telemetry.addData("Drive", "Fwd=%.2f, Strafe=%.2f, Turn=%.2f", forward, strafe, turn);
                 telemetry.addData("Turret Mode", autoAim ? "AUTO-AIM" : "MANUAL");
-                telemetry.addData("Turret Pause", turretPaused
-                        ? "HELD - tracking continues, motor stopped" : "released");
                 telemetry.addData("Aim Source", "%s (%s)",
                         turret.getTrackingState(), turret.getTrackingStateReason());
                 telemetry.addData("LED Command", "position=%.3f, pulse=%.0f us",
@@ -297,19 +292,43 @@ public class turretTest extends LinearOpMode {
                         turretSubsystem.BANK_AIM_SWITCH_HOLD_MS,
                         turret.getBankAimSwitchRemainingMs());
                 telemetry.addData("Target Visible", turret.hasTarget()
-                        ? "YES (" + turret.getVisibleTagCount() + " tags: "
-                          + turret.getVisibleTagIds() + ")"
+                        ? "YES (" + turret.getVisibleTagCount() + " target tags)"
+                        : turret.isLandmarkTrackingActive()
+                          ? "LANDMARK TAGS (target IDs hidden)"
                         : turret.isOdometryTrackingActive()
                           ? "ODOMETRY (vision lost)" : "NO");
+                telemetry.addData("All BIOBUZZ Tags", turret.getVisibleTagIds());
+                telemetry.addData("Landmark Assist", "links=%d sourceCluster=%d active=%s",
+                        turret.getLandmarkLinkCount(),
+                        turret.getLandmarkSourceClusterFirstId(),
+                        turret.isLandmarkTrackingActive());
+                telemetry.addData("Velocity Prediction", "rate=%+.1f deg/s lead=%+.2f deg lookahead=%.0f ms",
+                        turret.getTargetBearingRateDegPerSec(),
+                        turret.getPredictionLeadDeg(),
+                        turretSubsystem.VELOCITY_PREDICTION_LOOKAHEAD_MS);
+                telemetry.addData("Visual Correction Age", "%.0f / %.0f ms ready window",
+                        turret.getVisualCorrectionAgeMs(),
+                        turretSubsystem.VISUAL_READY_MAX_AGE_MS);
                 telemetry.addData("Hive Field Memory",
                         !turret.hasFieldTargetMemory() ? "EMPTY"
                                 : turret.isOdometryPoseValid()
-                                        ? "SAVED / TRACKING"
-                                        : "SAVED / ODOMETRY PAUSED");
+                                  ? "SAVED / TRACKING"
+                                        : "SAVED / ODOMETRY INVALID");
+                telemetry.addData("Hive Field Point", turret.hasFieldTargetMemory()
+                        ? String.format(java.util.Locale.US, "x=%.1f y=%.1f in",
+                                turret.getFieldTargetXIn(), turret.getFieldTargetYIn())
+                        : "EMPTY");
                 telemetry.addData("Odo Target", "active=%s age=%.0f ms bearing=%+.1f dist=%.1f",
                         turret.isOdometryTrackingActive(), turret.getTargetAgeMs(),
                         turret.getOdometryTrackedBearingDeg(),
                         turret.getOdometryTrackedDistanceIn());
+                telemetry.addData("Turret Reachability", turret.isTargetClamped()
+                        ? String.format(java.util.Locale.US,
+                                "UNREACHABLE: requested %.1f -> stop %.1f ticks; TURN ROBOT TOWARD HIVE",
+                                turret.getRequestedTargetTicks(), turret.getTargetTicks())
+                        : turret.isTargetWrapped()
+                          ? "reachable through equivalent revolution"
+                          : "reachable");
                 telemetry.addData("Cluster Center", turret.isClusterGeometryValid()
                         ? "GEOMETRY SOLVED" : "ANGULAR FALLBACK");
                 telemetry.addData("Aim Ready?", turret.isAimReady() ? "READY" : "ALIGNING");
@@ -376,7 +395,7 @@ public class turretTest extends LinearOpMode {
     private void addControlsTelemetry() {
         telemetry.addLine("=== TURRET TEST CONTROLS ===");
         telemetry.addLine("Drive: left stick move | right stick X turn");
-        telemetry.addLine("Aim: hold RT auto | BACK hold pause | D-pad L/R manual | START zero");
+        telemetry.addLine("Aim: hold RT auto | D-pad L/R manual | START zero");
         telemetry.addLine("Shooter/feeders: A toggle ON | B OFF");
         telemetry.addLine("Tune select: X next | D-pad DOWN previous");
         telemetry.addLine("Tune value: LB decrease | RB increase | Y reset selected");

@@ -27,7 +27,7 @@ public class turretSubsystem {
     // ========================= VALUES TO CALIBRATE =========================
 
     /** Displayed by the test TeleOp so the deployed tuning profile is verifiable. */
-    public static final String TUNE_VERSION = "clean-v21-auto-field-handoff";
+    public static final String TUNE_VERSION = "clean-v25-reachability";
 
     /** Limelight AprilTag pipeline number. */
     public static final int APRILTAG_PIPELINE = 1;
@@ -37,13 +37,11 @@ public class turretSubsystem {
     /** The one authoritative source currently allowed to command the turret. */
     public enum TrackingState {
         MANUAL,
-        PAUSED,
         VISION,
+        LANDMARK,
         ODOMETRY,
         HOLD,
-        FAULT,
-        RESCAN,
-        FIELD_HANDOFF
+        FAULT
     }
 
     /** First AprilTag ID in each four-tag CELL cluster. */
@@ -85,8 +83,6 @@ public class turretSubsystem {
     /** A true relative-position overrun stops all power until the turret is safely re-zeroed. */
     public static final int HARD_LIMIT_OVERRUN_TICKS = 25;
     public static final double MAX_TURRET_POWER = 0.85;
-    /** Slow camera-search power; normal vision/odometry tracking still uses MAX_TURRET_POWER. */
-    public static double RESCAN_MAX_POWER = 0.22;
     /** One physical turret revolution, used to choose a reachable equivalent angle. */
     public static final double TURRET_TICKS_PER_REVOLUTION = 360.0 * TICKS_PER_DEGREE;
 
@@ -183,6 +179,22 @@ public class turretSubsystem {
     public static final double FUSION_CONFIRM_MAX_GAP_MS = 200.0;
     /** Likewise, do not switch to the other hive cluster from one incorrect tag frame. */
     public static final int CLUSTER_SWITCH_CONFIRM_FRAMES = 3;
+    /**
+     * A non-target cluster may correct the remembered target only after it was
+     * seen in the same frame as that target. BIOBUZZ clusters move, so this is
+     * a learned relative landmark, not absolute AprilTag field localization.
+     */
+    public static final boolean LANDMARK_ASSIST_ENABLED = true;
+    public static final double LANDMARK_ROLL_MATCH_DEG = 12.0;
+    public static final double LANDMARK_MAX_LINK_AGE_MS = 30000.0;
+    public static final int LANDMARK_STABLE_FRAMES = 2;
+    /**
+     * Predict target bearing through the turret's mechanical response delay.
+     * Capture latency is already removed by capture-time pose/encoder history.
+     */
+    public static boolean VELOCITY_PREDICTION_ENABLED = true;
+    public static double VELOCITY_PREDICTION_LOOKAHEAD_MS = 120.0;
+    public static double VELOCITY_PREDICTION_MAX_LEAD_DEG = 8.0;
     private static final double FUSION_RATE_FILTER_ALPHA = 0.35;
     private static final double POSE_HISTORY_MS = 600.0;
     /**
@@ -222,10 +234,12 @@ public class turretSubsystem {
     // ========================= NORMAL CONSTANTS =========================
 
     private static final long MAX_RESULT_AGE_MS = 120;
+    /**
+     * Odometry may bridge a short dropped frame, but aim-ready requires a recent
+     * direct target or learned-landmark correction. This does not gate the feeder.
+     */
+    public static double VISUAL_READY_MAX_AGE_MS = 250.0;
     private static final long HOLD_AFTER_TARGET_LOSS_MS = 350;
-    /** Rescan covers every encoder angle allowed by the cable-safe soft limits. */
-    private static final double RESCAN_ENDPOINT_TOLERANCE_TICKS = 8.0;
-    private static final double RESCAN_MAX_TIME_MS = 12000.0;
     private static final double MIN_DISTANCE_ANGLE_DEG = 2.0;
     /** Includes the roughly 204-inch diagonal of the 12-foot field, plus measurement margin. */
     private static final double MAX_DISTANCE_IN = 230.0;
@@ -271,8 +285,6 @@ public class turretSubsystem {
     private final double[] distanceHistory = new double[5];
 
     private boolean autoAimEnabled;
-    private boolean movementPaused;
-    private double pauseHoldTicks = Double.NaN;
     private double manualPower;
     /** Test-only trim owned by this subsystem instance; a new OpMode starts at zero. */
     private double runtimeAimTrimDeg;
@@ -321,6 +333,8 @@ public class turretSubsystem {
     private String trackingStateReason = "manual control";
 
     private boolean targetVisible;
+    /** Direct frame and fused field target currently agree, so prediction is safe. */
+    private boolean directVisionFusionTrusted;
     private boolean aimReady;
     private int stableAimFrames;
     private double lastVisionErrorDeg;
@@ -373,6 +387,7 @@ public class turretSubsystem {
     private double fusPendingX = Double.NaN, fusPendingY = Double.NaN;
     private double fusPendingLastMs = -1;
     private int fusPendingFrames;
+    private String fusPendingSource = "";
     private double fusMinusMeasTicks = Double.NaN;
     private double lastOdoReadMs;
     private double lastWrittenPower = Double.NaN;
@@ -381,17 +396,22 @@ public class turretSubsystem {
     private boolean targetWrapped;
     /** Stop selected while the requested bearing crosses the turret's unreachable sector. */
     private double blindSectorHoldTicks = Double.NaN;
-    private boolean rescanActive;
-    private int rescanPhase;
-    private double rescanTargetTicks = Double.NaN;
-    private double rescanSecondTargetTicks = Double.NaN;
-    private double rescanStartedMs = -1;
-    private boolean fieldHandoffActive;
-    private double fieldHandoffTargetTicks = Double.NaN;
     /** Selected soft-stop exit while the target is inside the unreachable rear sector. */
     private int pendingClusterFirstId = -1;
     private int pendingClusterFrames;
     private double pendingClusterLastFrameTimestamp = Double.NaN;
+    private static final int CLUSTER_SLOT_COUNT = 4;
+    private final boolean[] landmarkLinkValid = new boolean[CLUSTER_SLOT_COUNT];
+    private final double[] landmarkToTargetXIn = new double[CLUSTER_SLOT_COUNT];
+    private final double[] landmarkToTargetYIn = new double[CLUSTER_SLOT_COUNT];
+    private final double[] landmarkReferenceRollDeg = new double[CLUSTER_SLOT_COUNT];
+    private final double[] landmarkLinkLearnedMs = new double[CLUSTER_SLOT_COUNT];
+    private int landmarkLinksTargetClusterFirstId = -1;
+    private boolean landmarkVisionActive;
+    private int landmarkSourceClusterFirstId = -1;
+    private int landmarkStableFrames;
+    private double lastLandmarkAssistMs = -1;
+    private double predictionLeadDeg;
     private long framesTotal;
     private double lastFrameWallMs = -1;
     private double frameIntervalMs;
@@ -408,6 +428,8 @@ public class turretSubsystem {
     private double autoAimOnMs = -1;
     private double readyAfterStopMs = Double.NaN;
     private double readyAfterEnableMs = Double.NaN;
+    /** Last time a direct or landmark source had enough stable frames for readiness. */
+    private double lastStableVisualMs = -1;
     private boolean readyReported;
     private boolean lastTargetVisibleForEvents;
     private boolean lastAtLimitForEvents;
@@ -436,10 +458,6 @@ public class turretSubsystem {
     public void setAutoAimEnabled(boolean enabled) {
         if (autoAimEnabled == enabled) return;
         autoAimEnabled = enabled;
-        if (!enabled) {
-            rescanActive = false;
-            fieldHandoffActive = false;
-        }
         autoAimOnMs = enabled ? clock.milliseconds() : -1;
         readyAfterEnableMs = Double.NaN;
         readyAfterStopMs = Double.NaN;
@@ -458,17 +476,6 @@ public class turretSubsystem {
         manualPower = clamp(power, -MAX_TURRET_POWER, MAX_TURRET_POWER);
     }
 
-    /**
-     * Stops turret output while tracking continues in the background. Holding
-     * this gives the camera a stationary view; release resumes the best source.
-     */
-    public void setMovementPaused(boolean paused) {
-        if (movementPaused == paused) return;
-        movementPaused = paused;
-        if (!paused) pauseHoldTicks = Double.NaN;
-        event("TURRET_PAUSE " + (paused ? "ON" : "OFF"));
-    }
-
     public void setAlliance(Alliance alliance) {
         if (alliance == null || this.alliance == alliance) return;
         this.alliance = alliance;
@@ -477,93 +484,15 @@ public class turretSubsystem {
         resetSideAim();
         selectedTagId = -1;
         targetVisible = false;
+        directVisionFusionTrusted = false;
         targetTicksInitialized = false;
         fusValid = false;
-        rescanActive = false;
-        fieldHandoffActive = false;
+        clearLandmarkLinks();
         blindSectorHoldTicks = Double.NaN;
         resetNearTargetStallSafety();
         clearFusionPending();
         clearPendingCluster();
         resetMeasurementHistory(false);
-    }
-
-    /**
-     * Forgets a bad saved hive and sweeps the complete cable-safe turret range.
-     * The nearer soft stop is visited first, then the opposite stop. A valid
-     * scorable AprilTag cluster cancels the scan immediately and vision takes over.
-     */
-    public void beginFullRangeRescan() {
-        setAutoAimEnabled(true);
-        fieldHandoffActive = false;
-
-        selectedClusterFirstId = -1;
-        selectedClusterRollDeg = Double.NaN;
-        selectedTagId = -1;
-        targetVisible = false;
-        lastTargetSeenMs = -1;
-        resetSideAim();
-        clearFusionPending();
-        clearPendingCluster();
-        resetMeasurementHistory(false);
-
-        double currentTicks = robot.getTurretPositionTicks();
-        boolean minIsNearer = Math.abs(currentTicks - MIN_TURRET_TICKS)
-                <= Math.abs(MAX_TURRET_TICKS - currentTicks);
-        rescanTargetTicks = minIsNearer ? MIN_TURRET_TICKS : MAX_TURRET_TICKS;
-        rescanSecondTargetTicks = minIsNearer ? MAX_TURRET_TICKS : MIN_TURRET_TICKS;
-        rescanPhase = 0;
-        rescanStartedMs = clock.milliseconds();
-        rescanActive = true;
-        blindSectorHoldTicks = Double.NaN;
-        targetTicks = rescanTargetTicks;
-        controlTargetTicks = rescanTargetTicks;
-        targetVelocityTicksPerSecond = 0;
-        targetTicksInitialized = true;
-        stableAimFrames = 0;
-        aimReady = false;
-        resetNearTargetStallSafety();
-        event(String.format(java.util.Locale.US,
-                "RESCAN_START ticks=%+.1f first=%+.1f second=%+.1f",
-                currentTicks, rescanTargetTicks, rescanSecondTargetTicks));
-    }
-
-    /**
-     * Called after odometry confirms that TeleOp crossed to the opposite half
-     * of the field. Discard the previous CELL and turn to the opposite bearing;
-     * vision takes over immediately when the new alliance CELL becomes visible.
-     */
-    public void beginOppositeFieldHandoff() {
-        setAutoAimEnabled(true);
-
-        selectedClusterFirstId = -1;
-        selectedClusterRollDeg = Double.NaN;
-        selectedTagId = -1;
-        targetVisible = false;
-        lastTargetSeenMs = -1;
-        resetSideAim();
-        clearFusionPending();
-        clearPendingCluster();
-        resetMeasurementHistory(false);
-
-        double currentTicks = robot.getTurretPositionTicks();
-        double requestedTicks = currentTicks
-                + AIM_DIRECTION_SIGN * 180.0 * TICKS_PER_DEGREE;
-        blindSectorHoldTicks = Double.NaN;
-        fieldHandoffTargetTicks = resolveTargetTicksWithinLimits(
-                requestedTicks, currentTicks);
-        fieldHandoffActive = true;
-        rescanActive = false;
-        targetTicks = fieldHandoffTargetTicks;
-        controlTargetTicks = fieldHandoffTargetTicks;
-        targetVelocityTicksPerSecond = 0;
-        targetTicksInitialized = true;
-        resetNearTargetStallSafety();
-        stableAimFrames = 0;
-        aimReady = false;
-        event(String.format(java.util.Locale.US,
-                "FIELD_HANDOFF_180 ticks=%+.1f->%+.1f",
-                currentTicks, fieldHandoffTargetTicks));
     }
 
     /**
@@ -597,8 +526,7 @@ public class turretSubsystem {
         manualPower = 0;
         encoderHistory.clear();
         motorVelocityInitialized = false;
-        rescanActive = false;
-        fieldHandoffActive = false;
+        clearLandmarkLinks();
         resetMeasurementHistory(true);
     }
 
@@ -614,9 +542,6 @@ public class turretSubsystem {
                 && nowMs - lastTransferFeedMs < DISTANCE_SHOT_FREEZE_MS;
         int currentTicks = robot.getTurretPositionTicks();
         lastTicks = currentTicks;
-        if (movementPaused && !Double.isFinite(pauseHoldTicks)) {
-            pauseHoldTicks = currentTicks;
-        }
         hardLimitFault = currentTicks < MIN_TURRET_TICKS - HARD_LIMIT_OVERRUN_TICKS
                 || currentTicks > MAX_TURRET_TICKS + HARD_LIMIT_OVERRUN_TICKS;
         updateFilteredMotorVelocity();
@@ -633,13 +558,10 @@ public class turretSubsystem {
         newFrameThisLoop = false;
         updateVision(nowMs, currentTicks);
         updateFusionPrediction();
-        updateRescan(nowMs, currentTicks);
         updateTrackingState(nowMs);
         long t2 = System.nanoTime();
 
-        if (trackingState == TrackingState.PAUSED) {
-            applyPausedControl(currentTicks);
-        } else if (autoAimEnabled) {
+        if (autoAimEnabled) {
             applyAutomaticControl(nowMs, currentTicks);
         } else {
             applyManualControl(currentTicks);
@@ -665,24 +587,22 @@ public class turretSubsystem {
         if (hardLimitFault) {
             trackingState = TrackingState.FAULT;
             trackingStateReason = "encoder outside hard limit";
-        } else if (movementPaused) {
-            trackingState = TrackingState.PAUSED;
-            trackingStateReason = "driver holding BACK";
         } else if (!autoAimEnabled) {
             trackingState = TrackingState.MANUAL;
             trackingStateReason = "driver control";
         } else if (targetVisible) {
-            fieldHandoffActive = false;
             trackingState = TrackingState.VISION;
             trackingStateReason = "fresh allowed AprilTag";
-        } else if (rescanActive) {
-            trackingState = TrackingState.RESCAN;
-            trackingStateReason = rescanPhase == 0
-                    ? "rescan: first safe endpoint"
-                    : "rescan: opposite safe endpoint";
-        } else if (fieldHandoffActive) {
-            trackingState = TrackingState.FIELD_HANDOFF;
-            trackingStateReason = "odometry crossed field center: turning 180";
+        } else if (pendingClusterFrames > 0) {
+            trackingState = TrackingState.HOLD;
+            trackingStateReason = "confirming upward CELL switch";
+        } else if (ODOMETRY_FUSION_ENABLED
+                && landmarkVisionActive
+                && lastLandmarkAssistMs >= 0
+                && nowMs - lastLandmarkAssistMs <= MAX_RESULT_AGE_MS
+                && fusValid && odometryPoseValid && Double.isFinite(fusTargetTicks)) {
+            trackingState = TrackingState.LANDMARK;
+            trackingStateReason = "non-target tag correcting saved CELL";
         } else if (lastTargetSeenMs >= 0
                 && nowMs - lastTargetSeenMs <= MAX_RESULT_AGE_MS) {
             trackingState = TrackingState.HOLD;
@@ -703,37 +623,6 @@ public class turretSubsystem {
             }
         }
         odometryTrackingActive = trackingState == TrackingState.ODOMETRY;
-    }
-
-    private void updateRescan(double nowMs, int currentTicks) {
-        if (!rescanActive) return;
-        if (targetVisible) {
-            rescanActive = false;
-            event("RESCAN_ACQUIRED tags=" + visibleTagIds);
-            return;
-        }
-        if (nowMs - rescanStartedMs >= RESCAN_MAX_TIME_MS) {
-            rescanActive = false;
-            event("RESCAN_TIMEOUT no valid tag");
-            return;
-        }
-
-        boolean endpointReached = Math.abs(currentTicks - rescanTargetTicks)
-                <= RESCAN_ENDPOINT_TOLERANCE_TICKS
-                && Math.abs(filteredMotorVelocityTicksPerSecond)
-                <= READY_MAX_VELOCITY_TPS;
-        if (!endpointReached) return;
-
-        if (rescanPhase == 0) {
-            rescanPhase = 1;
-            rescanTargetTicks = rescanSecondTargetTicks;
-            resetNearTargetStallSafety();
-            event(String.format(java.util.Locale.US,
-                    "RESCAN_REVERSE target=%+.1f", rescanTargetTicks));
-        } else {
-            rescanActive = false;
-            event("RESCAN_COMPLETE no valid tag");
-        }
     }
 
     /** Stopped/moving state from Pinpoint with hysteresis + debounce, used to time "stop -> ready". */
@@ -767,20 +656,41 @@ public class turretSubsystem {
     }
 
     /**
-     * Ready needs a stable small vision error AND (in auto mode) a turret that
-     * is physically at its setpoint and nearly stationary.
+     * Ready needs a recent visual correction, a stable source, and a settled
+     * turret. Odometry keeps aiming through longer dropouts but is not allowed
+     * to advertise shot readiness indefinitely. The feeder remains driver-owned.
      */
     private void updateReadyState(double nowMs, int currentTicks) {
+        boolean briefVisionDropout = trackingState == TrackingState.HOLD
+                && pendingClusterFrames == 0
+                && lastTargetSeenMs >= 0
+                && nowMs - lastTargetSeenMs <= MAX_RESULT_AGE_MS;
         boolean targetKnown = trackingState == TrackingState.VISION
-                || trackingState == TrackingState.ODOMETRY;
-        boolean sourceStable = trackingState == TrackingState.ODOMETRY
+                || trackingState == TrackingState.LANDMARK
+                || trackingState == TrackingState.ODOMETRY
+                || briefVisionDropout;
+        boolean currentVisualStable = (trackingState == TrackingState.LANDMARK
+                && landmarkStableFrames >= LANDMARK_STABLE_FRAMES)
                 || (trackingState == TrackingState.VISION
                 && stableAimFrames >= AIM_STABLE_FRAMES);
+        if (currentVisualStable) lastStableVisualMs = nowMs;
+        boolean stableVisualRecent = lastStableVisualMs >= 0
+                && nowMs - lastStableVisualMs <= Math.max(0, VISUAL_READY_MAX_AGE_MS);
+        boolean sourceStable = currentVisualStable
+                || ((trackingState == TrackingState.ODOMETRY || briefVisionDropout)
+                && stableVisualRecent);
         boolean settled = !autoAimEnabled
                 || (Math.abs(controlTargetTicks - currentTicks) <= READY_POSITION_TOL_TICKS
                 && Math.abs(filteredMotorVelocityTicksPerSecond) <= READY_MAX_VELOCITY_TPS);
+        double lastVisualCorrectionMs = Math.max(lastTargetSeenMs, lastLandmarkAssistMs);
+        boolean visualCorrectionRecent = lastVisualCorrectionMs >= 0
+                && nowMs - lastVisualCorrectionMs <= Math.max(0, VISUAL_READY_MAX_AGE_MS);
         boolean wasReady = aimReady;
-        aimReady = targetKnown && sourceStable && settled;
+        // Reaching a cable-safe soft stop is not the same as reaching the hive.
+        // The transfer remains driver-owned, but the LED/telemetry must not claim
+        // that an unreachable target is ready to shoot.
+        aimReady = targetKnown && sourceStable && settled && visualCorrectionRecent
+                && !targetClamped;
         if (aimReady && !wasReady && autoAimEnabled) {
             if (autoAimOnMs >= 0 && Double.isNaN(readyAfterEnableMs)) {
                 readyAfterEnableMs = nowMs - autoAimOnMs;
@@ -815,9 +725,17 @@ public class turretSubsystem {
         }
         if (targetClamped != lastClampedForEvents) {
             lastClampedForEvents = targetClamped;
+            double eventBearingDeg = Double.isFinite(fusBearingDeg)
+                    ? fusBearingDeg : lastRobotBearingDeg;
+            double firstLimitDeg = MIN_TURRET_TICKS
+                    / (AIM_DIRECTION_SIGN * TICKS_PER_DEGREE);
+            double secondLimitDeg = MAX_TURRET_TICKS
+                    / (AIM_DIRECTION_SIGN * TICKS_PER_DEGREE);
             event(targetClamped ? String.format(java.util.Locale.US,
-                    "TARGET_OUT_OF_RANGE bearing=%.1f deg (turret limit +-%.0f deg)",
-                    lastRobotBearingDeg, MAX_TURRET_TICKS / TICKS_PER_DEGREE)
+                    "TARGET_OUT_OF_RANGE bearing=%.1f deg reachable=[%.1f, %.1f] deg; turn robot toward hive",
+                    eventBearingDeg,
+                    Math.min(firstLimitDeg, secondLimitDeg),
+                    Math.max(firstLimitDeg, secondLimitDeg))
                     : "TARGET_IN_RANGE");
         }
         if (targetWrapped != lastWrappedForEvents) {
@@ -881,8 +799,17 @@ public class turretSubsystem {
         m.put("turret.POSITION_KP", String.valueOf(POSITION_KP));
         m.put("turret.VELOCITY_KD", String.valueOf(VELOCITY_KD));
         m.put("turret.STATIC_FRICTION_POWER", String.valueOf(STATIC_FRICTION_POWER));
-        m.put("turret.RESCAN_MAX_POWER", String.valueOf(RESCAN_MAX_POWER));
+        m.put("turret.VISUAL_READY_MAX_AGE_MS", String.valueOf(VISUAL_READY_MAX_AGE_MS));
         m.put("turret.ODOMETRY_FUSION_ENABLED", String.valueOf(ODOMETRY_FUSION_ENABLED));
+        m.put("turret.LANDMARK_ASSIST_ENABLED", String.valueOf(LANDMARK_ASSIST_ENABLED));
+        m.put("turret.LANDMARK_ROLL_MATCH_DEG", String.valueOf(LANDMARK_ROLL_MATCH_DEG));
+        m.put("turret.LANDMARK_MAX_LINK_AGE_MS", String.valueOf(LANDMARK_MAX_LINK_AGE_MS));
+        m.put("turret.VELOCITY_PREDICTION_ENABLED",
+                String.valueOf(VELOCITY_PREDICTION_ENABLED));
+        m.put("turret.VELOCITY_PREDICTION_LOOKAHEAD_MS",
+                String.valueOf(VELOCITY_PREDICTION_LOOKAHEAD_MS));
+        m.put("turret.VELOCITY_PREDICTION_MAX_LEAD_DEG",
+                String.valueOf(VELOCITY_PREDICTION_MAX_LEAD_DEG));
         m.put("turret.ODOMETRY_FORWARD_SIGN", String.valueOf(ODOMETRY_FORWARD_SIGN));
         m.put("turret.ODOMETRY_LEFT_SIGN", String.valueOf(ODOMETRY_LEFT_SIGN));
         m.put("turret.ODOMETRY_HEADING_SIGN", String.valueOf(ODOMETRY_HEADING_SIGN));
@@ -900,10 +827,6 @@ public class turretSubsystem {
         r.put("tur_ctrl_us", dbgControlUs);
 
         r.put("tur_auto", autoAimEnabled);
-        r.put("tur_paused", movementPaused);
-        r.put("tur_rescan", rescanActive);
-        r.put("tur_rescan_phase", rescanPhase);
-        r.put("tur_field_handoff", fieldHandoffActive);
         r.put("tur_ticks", lastTicks);
         r.put("tur_raw_encoder_ticks", robot.getTurretRawEncoderTicks());
         r.put("tur_zero_offset_ticks", robot.getTurretEncoderZeroTicks());
@@ -933,6 +856,7 @@ public class turretSubsystem {
         r.put("tur_led_position", indicatorPosition);
 
         r.put("vis_visible", targetVisible);
+        r.put("vis_fusion_trusted", directVisionFusionTrusted);
         r.put("vis_tags", visibleTagCount);
         r.put("vis_new_frame", newFrameThisLoop);
         r.put("vis_frames_total", framesTotal);
@@ -966,6 +890,7 @@ public class turretSubsystem {
         r.put("vis_dist_frozen_for_shot", distanceFrozenAfterShot);
         r.put("vis_fused_range_disagreement_in", getRangeDisagreementIn());
         r.put("vis_target_age_ms", Math.min(getTargetAgeMs(), 99999));
+        r.put("vis_correction_age_ms", Math.min(getVisualCorrectionAgeMs(), 99999));
 
         r.put("aim_ready", aimReady);
         r.put("aim_source", trackingState.ordinal());
@@ -998,6 +923,11 @@ public class turretSubsystem {
         r.put("fus_minus_meas_ticks", newFrameThisLoop ? fusMinusMeasTicks : Double.NaN);
         r.put("fus_minus_setpoint_ticks", fusValid ? fusTargetTicks - targetTicks : Double.NaN);
         r.put("fus_rate_dps", fusRateDps);
+        r.put("fus_prediction_lead_deg", predictionLeadDeg);
+        r.put("landmark_active", landmarkVisionActive);
+        r.put("landmark_source_cluster", landmarkSourceClusterFirstId);
+        r.put("landmark_stable_frames", landmarkStableFrames);
+        r.put("landmark_link_count", getLandmarkLinkCount());
         r.put("tur_target_clamped", targetClamped);
         r.put("tur_hard_limit_fault", hardLimitFault);
         r.put("odo_x_in", robotFieldXIn);
@@ -1008,7 +938,12 @@ public class turretSubsystem {
         r.put("odo_heading_rate", Math.toDegrees(robotHeadingRateRadPerSec));
         r.put("odo_speed", robotSpeedInPerSec);
         r.put("robot_stopped", robotStopped);
-        r.put("bearing_deg", Double.isNaN(lastRobotBearingDeg) ? Double.NaN : lastRobotBearingDeg);
+        // Keep bearing_deg useful during vision loss: it is the current bearing
+        // to the saved field point. Preserve the last raw vision bearing in its
+        // own column so the two values cannot be mistaken for each other.
+        r.put("bearing_deg", Double.isFinite(fusBearingDeg)
+                ? fusBearingDeg : lastRobotBearingDeg);
+        r.put("vision_bearing_deg", lastRobotBearingDeg);
         r.put("odo_tracking", odometryTrackingActive);
     }
 
@@ -1023,8 +958,9 @@ public class turretSubsystem {
         List<LLResultTypes.FiducialResult> tags = fresh ? result.getFiducialResults() : null;
         updateVisibleTagText(tags);
         double resultTimestamp = result == null ? Double.NaN : result.getTimestamp();
-        List<LLResultTypes.FiducialResult> clusterTags = selectClusterTags(
-                tags, resultTimestamp);
+        List<ClusterCandidate> candidates = createClusterCandidates(tags);
+        List<LLResultTypes.FiducialResult> clusterTags = selectTargetClusterTags(
+                candidates, resultTimestamp);
         targetVisible = !clusterTags.isEmpty();
         visibleTagCount = clusterTags.size();
 
@@ -1033,22 +969,50 @@ public class turretSubsystem {
             dbgCaptureLat = result.getCaptureLatency();
             dbgTargetingLat = result.getTargetingLatency();
         }
-
-        if (!targetVisible) {
+        if (!fresh || result == null) {
+            directVisionFusionTrusted = false;
             clusterGeometryValid = false;
-            aimReady = false;
             stableAimFrames = 0;
+            if (lastLandmarkAssistMs < 0
+                    || nowMs - lastLandmarkAssistMs > MAX_RESULT_AGE_MS) {
+                landmarkVisionActive = false;
+                landmarkStableFrames = 0;
+            }
             return;
         }
 
         double frameTimestamp = resultTimestamp;
         if (frameTimestamp == lastFrameTimestamp) return;
         lastFrameTimestamp = frameTimestamp;
-        lastTargetSeenMs = nowMs;
         newFrameThisLoop = true;
         framesTotal++;
         if (lastFrameWallMs >= 0) frameIntervalMs = nowMs - lastFrameWallMs;
         lastFrameWallMs = nowMs;
+
+        lastLatencyMs = result.getStaleness() + result.getCaptureLatency()
+                + result.getTargetingLatency() + EXTRA_LATENCY_MS;
+        double captureTimeMs = nowMs - lastLatencyMs;
+        double ticksAtCapture = encoderTicksAt(captureTimeMs);
+        dbgTicksAtCapture = ticksAtCapture;
+
+        if (!targetVisible) {
+            directVisionFusionTrusted = false;
+            clusterGeometryValid = false;
+            stableAimFrames = 0;
+            if (pendingClusterFrames == 0) {
+                updateFusionFromLandmarks(
+                        nowMs, captureTimeMs, ticksAtCapture, candidates);
+            } else {
+                landmarkVisionActive = false;
+                landmarkStableFrames = 0;
+            }
+            return;
+        }
+
+        landmarkVisionActive = false;
+        landmarkStableFrames = 0;
+        landmarkSourceClusterFirstId = -1;
+        lastTargetSeenMs = nowMs;
 
         ClusterAim clusterAim = calculateClusterAim(clusterTags);
         dbgRawTxDeg = clusterAim.txDeg;
@@ -1057,11 +1021,6 @@ public class turretSubsystem {
         updateDistance(clusterAim.averageTyDeg, selectedTagId,
                 clusterAim.horizontalDistanceIn, targetAgeBeforeFrameMs);
 
-        lastLatencyMs = result.getStaleness() + result.getCaptureLatency()
-                + result.getTargetingLatency() + EXTRA_LATENCY_MS;
-        double captureTimeMs = nowMs - lastLatencyMs;
-        double ticksAtCapture = encoderTicksAt(captureTimeMs);
-        dbgTicksAtCapture = ticksAtCapture;
         // A positive turret movement reduces a same-direction image error.
         double turretMovementDeg = LATENCY_COMPENSATION_ENABLED
                 ? -(currentTicks - ticksAtCapture)
@@ -1087,7 +1046,19 @@ public class turretSubsystem {
         // A feeding ball can briefly shake the camera or cover part of a tag.
         // Keep predicting from the last trusted field point during that window.
         if (!distanceFrozenAfterShot) {
-            updateFusionFromFrame(nowMs, captureTimeMs, bearingAtCaptureDeg, fusionDistanceIn);
+            double[] targetMeasurement = fieldMeasurementFromFrame(
+                    captureTimeMs, bearingAtCaptureDeg, fusionDistanceIn);
+            boolean accepted = updateFusionFromFieldMeasurement(
+                    nowMs, targetMeasurement, "target");
+            directVisionFusionTrusted = accepted;
+            if (accepted) {
+                learnLandmarkLinks(nowMs, captureTimeMs, ticksAtCapture,
+                        targetMeasurement, candidates);
+            }
+        } else {
+            // A feed can shake/occlude the image; keep using the last trusted
+            // field target rather than accepting the disturbed direct frame.
+            directVisionFusionTrusted = fusValid && odometryPoseValid;
         }
 
         // Convert the raw target bearing into the calibrated shooter bearing. Expressing
@@ -1117,7 +1088,8 @@ public class turretSubsystem {
             double targetAgeBeforeFrameMs) {
         double measuredDistanceIn = clusterDistanceIn;
         if (!Double.isFinite(measuredDistanceIn)) {
-            measuredDistanceIn = estimateTagFloorForwardFromTy(targetYDegrees, tagId);
+            measuredDistanceIn = estimateTagFloorForwardFromTy(
+                    targetYDegrees, tagId, selectedClusterFirstId);
         }
         rawDistanceIn = measuredDistanceIn;
         if (measuredDistanceIn <= 0 || measuredDistanceIn >= MAX_DISTANCE_IN) return;
@@ -1207,6 +1179,7 @@ public class turretSubsystem {
             // A forced pose resync changes the coordinate frame underneath the
             // saved field point, so discard it instead of steering to stale coordinates.
             fusValid = false;
+            clearLandmarkLinks();
             event("ODO_RESYNC_FIELD_TARGET_CLEARED");
         }
         odoConsecutiveJumps = 0;
@@ -1318,26 +1291,39 @@ public class turretSubsystem {
         return AIM_ANGLE_SCALE * canonicalBearingDeg + getTotalAimOffsetDeg();
     }
 
-    /** Refines the field-anchored target with one camera frame (pose at capture time). */
-    private void updateFusionFromFrame(
-            double nowMs, double captureTimeMs, double bearingDeg, double distIn) {
+    /** Field-space measurement made from the latency-aligned robot pose. */
+    private double[] fieldMeasurementFromFrame(
+            double captureTimeMs, double bearingDeg, double distIn) {
         double[] pose = poseAt(captureTimeMs);
         if (pose == null || !odometryPoseValid || !Double.isFinite(distIn)
                 || distIn < 1.0 || distIn > MAX_DISTANCE_IN) {
             poseHistoryMisses++;
-            return;
+            return null;
         }
-        double[] meas = fieldPointFromBearing(pose, bearingDeg, distIn);
+        return fieldPointFromBearing(pose, bearingDeg, distIn);
+    }
+
+    /** Refines the field-anchored target with one field-space observation. */
+    private boolean updateFusionFromFieldMeasurement(
+            double nowMs, double[] meas, String source) {
+        if (meas == null || meas.length < 2
+                || !Double.isFinite(meas[0]) || !Double.isFinite(meas[1])) {
+            return false;
+        }
         fusMeasX = meas[0];
         fusMeasY = meas[1];
         if (fusValid) {
-            double[] pred = bearingDistanceTo(pose, fusX, fusY);
-            fusResidDeg = wrapDeg(bearingDeg - pred[0]);
+            double[] currentPose = new double[]{
+                    robotFieldXIn, robotFieldYIn, robotFieldHeadingRad};
+            double[] predicted = bearingDistanceTo(currentPose, fusX, fusY);
+            double[] measured = bearingDistanceTo(currentPose, meas[0], meas[1]);
+            fusResidDeg = wrapDeg(measured[0] - predicted[0]);
             fusResidIn = Math.hypot(meas[0] - fusX, meas[1] - fusY);
             if (Math.abs(fusResidDeg) > FUSION_REJECT_DEG || fusResidIn > FUSION_REJECT_IN) {
                 boolean pendingExpired = fusPendingLastMs < 0
                         || nowMs - fusPendingLastMs > FUSION_CONFIRM_MAX_GAP_MS;
                 boolean matchesPending = !pendingExpired
+                        && source.equals(fusPendingSource)
                         && Double.isFinite(fusPendingX) && Double.isFinite(fusPendingY)
                         && Math.hypot(meas[0] - fusPendingX, meas[1] - fusPendingY)
                         <= FUSION_CONFIRM_MATCH_IN;
@@ -1345,6 +1331,7 @@ public class turretSubsystem {
                     fusPendingX = meas[0];
                     fusPendingY = meas[1];
                     fusPendingFrames = 1;
+                    fusPendingSource = source;
                 } else {
                     fusPendingFrames++;
                     double pendingGain = 1.0 / fusPendingFrames;
@@ -1355,15 +1342,15 @@ public class turretSubsystem {
                 if (fusPendingFrames < FUSION_RESEED_CONFIRM_FRAMES) {
                     if (fusPendingFrames == 1) {
                         event(String.format(java.util.Locale.US,
-                                "FUSION_OUTLIER_HELD residDeg=%+.1f residIn=%.1f",
-                                fusResidDeg, fusResidIn));
+                                "FUSION_OUTLIER_HELD source=%s residDeg=%+.1f residIn=%.1f",
+                                source, fusResidDeg, fusResidIn));
                     }
-                    return;
+                    return false;
                 }
                 fusReseeds++;
                 event(String.format(java.util.Locale.US,
-                        "FUSION_RESEED_CONFIRMED residDeg=%+.1f residIn=%.1f frames=%d speed=%.1f hdgRate=%.1f",
-                        fusResidDeg, fusResidIn, fusPendingFrames, robotSpeedInPerSec,
+                        "FUSION_RESEED_CONFIRMED source=%s residDeg=%+.1f residIn=%.1f frames=%d speed=%.1f hdgRate=%.1f",
+                        source, fusResidDeg, fusResidIn, fusPendingFrames, robotSpeedInPerSec,
                         Math.toDegrees(robotHeadingRateRadPerSec)));
                 fusX = fusPendingX;
                 fusY = fusPendingY;
@@ -1384,8 +1371,17 @@ public class turretSubsystem {
             fusResidIn = Double.NaN;
             clearFusionPending();
             event(String.format(java.util.Locale.US,
-                    "FUSION_SEED field=(%.1f, %.1f) dist=%.1f", fusX, fusY, distIn));
+                    "FUSION_SEED source=%s field=(%.1f, %.1f)", source, fusX, fusY));
         }
+        return true;
+    }
+
+    /** Refines the target directly from the selected CELL at capture time. */
+    private boolean updateFusionFromFrame(
+            double nowMs, double captureTimeMs, double bearingDeg, double distIn) {
+        return updateFusionFromFieldMeasurement(nowMs,
+                fieldMeasurementFromFrame(captureTimeMs, bearingDeg, distIn),
+                "target");
     }
 
     private void clearFusionPending() {
@@ -1393,10 +1389,12 @@ public class turretSubsystem {
         fusPendingY = Double.NaN;
         fusPendingLastMs = -1;
         fusPendingFrames = 0;
+        fusPendingSource = "";
     }
 
     /** Every loop: where should the turret point RIGHT NOW according to odometry. */
     private void updateFusionPrediction() {
+        predictionLeadDeg = 0;
         // A bad/stale Pinpoint sample must pause field tracking, not erase the
         // field point. Tracking resumes automatically when odometry recovers.
         if (!fusValid || !odometryPoseValid) {
@@ -1419,9 +1417,6 @@ public class turretSubsystem {
             return;
         }
         bankAimCorrectionDeg = bankAimCorrectionForDistance(fusDistanceIn);
-        fusTargetTicks = AIM_DIRECTION_SIGN
-                * (calibratedAimBearingDeg(fusBearingDeg) + bankAimCorrectionDeg)
-                * TICKS_PER_DEGREE;
 
         if (fusPrevBearingMs >= 0 && lastOdoReadMs > fusPrevBearingMs) {
             double dtS = (lastOdoReadMs - fusPrevBearingMs) / 1000.0;
@@ -1436,21 +1431,19 @@ public class turretSubsystem {
             fusPrevBearingMs = lastOdoReadMs;
         }
 
-    }
+        predictionLeadDeg = 0;
+        if (VELOCITY_PREDICTION_ENABLED && odometryRateValid && !robotStopped) {
+            double lookaheadS = Math.max(0, VELOCITY_PREDICTION_LOOKAHEAD_MS) / 1000.0;
+            predictionLeadDeg = clamp(
+                    fusRateDps * lookaheadS,
+                    -Math.abs(VELOCITY_PREDICTION_MAX_LEAD_DEG),
+                    Math.abs(VELOCITY_PREDICTION_MAX_LEAD_DEG));
+        }
+        fusTargetTicks = AIM_DIRECTION_SIGN
+                * (calibratedAimBearingDeg(fusBearingDeg + predictionLeadDeg)
+                + bankAimCorrectionDeg)
+                * TICKS_PER_DEGREE;
 
-    private void applyPausedControl(int currentTicks) {
-        if (!Double.isFinite(pauseHoldTicks)) pauseHoldTicks = currentTicks;
-        targetTicks = pauseHoldTicks;
-        controlTargetTicks = pauseHoldTicks;
-        targetVelocityTicksPerSecond = 0;
-        targetTicksInitialized = true;
-        targetClamped = false;
-        targetWrapped = false;
-        dbgRequestedTargetTicks = pauseHoldTicks;
-        dbgP = dbgD = dbgStiction = dbgRawPower = dbgDesiredPower = 0;
-        appliedPower = 0;
-        resetNearTargetStallSafety();
-        writePower(0);
     }
 
     private void applyAutomaticControl(double nowMs, int currentTicks) {
@@ -1466,23 +1459,23 @@ public class turretSubsystem {
             return;
         }
 
-        if (trackingState == TrackingState.VISION && Double.isFinite(visionTargetTicks)) {
-            targetTicks = visionTargetTicks;
-            targetTicksInitialized = true;
-            targetVelocityTicksPerSecond = 0;
-        } else if (trackingState == TrackingState.RESCAN) {
-            targetTicks = rescanTargetTicks;
-            targetTicksInitialized = true;
-            targetVelocityTicksPerSecond = 0;
-        } else if (trackingState == TrackingState.FIELD_HANDOFF) {
-            targetTicks = fieldHandoffTargetTicks;
-            targetTicksInitialized = true;
-            targetVelocityTicksPerSecond = 0;
-        } else if (trackingState == TrackingState.ODOMETRY) {
+        boolean fusedTrackingSource = (trackingState == TrackingState.VISION
+                && directVisionFusionTrusted)
+                || trackingState == TrackingState.LANDMARK
+                || trackingState == TrackingState.ODOMETRY;
+        if (ODOMETRY_FUSION_ENABLED && fusedTrackingSource
+                && Double.isFinite(fusTargetTicks)) {
+            // One predicted command path for direct vision, learned landmarks,
+            // and pure odometry prevents source-switch jumps.
             targetTicks = fusTargetTicks;
             targetTicksInitialized = true;
             targetVelocityTicksPerSecond = robotStopped
                     ? 0 : AIM_DIRECTION_SIGN * fusRateDps * TICKS_PER_DEGREE;
+        } else if (trackingState == TrackingState.VISION
+                && Double.isFinite(visionTargetTicks)) {
+            targetTicks = visionTargetTicks;
+            targetTicksInitialized = true;
+            targetVelocityTicksPerSecond = 0;
         } else {
             // HOLD retains the last safe setpoint. It does not invent or blend
             // another target source.
@@ -1521,12 +1514,9 @@ public class turretSubsystem {
             appliedPower = MOTOR_DIRECTION_SIGN * output.power;
         }
         dbgDesiredPower = appliedPower;
-        double activePowerLimit = trackingState == TrackingState.RESCAN
-                ? clamp(Math.abs(RESCAN_MAX_POWER), 0.05, MAX_TURRET_POWER)
-                : MAX_TURRET_POWER;
-        dbgSaturated = Math.abs(appliedPower) > activePowerLimit;
+        dbgSaturated = Math.abs(appliedPower) > MAX_TURRET_POWER;
         appliedPower = limitAtSoftStops(
-                clamp(appliedPower, -activePowerLimit, activePowerLimit), currentTicks);
+                clamp(appliedPower, -MAX_TURRET_POWER, MAX_TURRET_POWER), currentTicks);
         writePower(appliedPower);
     }
 
@@ -1622,8 +1612,9 @@ public class turretSubsystem {
         } else if (aimReady && trackingState == TrackingState.VISION) {
             // Green is reserved for a stable, currently visible Limelight target.
             position = LED_VISION_LOCK_POSITION;
-        } else if (aimReady && trackingState == TrackingState.ODOMETRY) {
-            // The turret is settled, but the target is only being carried by odometry.
+        } else if (aimReady && (trackingState == TrackingState.LANDMARK
+                || trackingState == TrackingState.ODOMETRY)) {
+            // Settled from saved target state without direct target-tag confidence.
             position = LED_ODOMETRY_POSITION;
         } else {
             position = LED_ALIGNING_POSITION;
@@ -1722,10 +1713,32 @@ public class turretSubsystem {
         return Math.max(min, Math.min(max, value));
     }
 
-    private List<LLResultTypes.FiducialResult> selectClusterTags(
-            List<LLResultTypes.FiducialResult> tags, double frameTimestamp) {
+    /** Builds one observation candidate for every BIOBUZZ CELL cluster in view. */
+    private List<ClusterCandidate> createClusterCandidates(
+            List<LLResultTypes.FiducialResult> tags) {
+        List<ClusterCandidate> candidates = new ArrayList<>();
+        if (tags == null || tags.isEmpty()) return candidates;
+
+        @SuppressWarnings("unchecked")
+        List<LLResultTypes.FiducialResult>[] buckets = new List[CLUSTER_SLOT_COUNT];
+        for (int i = 0; i < buckets.length; i++) buckets[i] = new ArrayList<>();
+        for (LLResultTypes.FiducialResult tag : tags) {
+            int slot = clusterSlotForFirstId(clusterFirstIdForTag(tag.getFiducialId()));
+            if (slot >= 0) buckets[slot].add(tag);
+        }
+        for (int slot = 0; slot < buckets.length; slot++) {
+            ClusterCandidate candidate = createClusterCandidate(
+                    30 + 4 * slot, buckets[slot]);
+            if (candidate != null) candidates.add(candidate);
+        }
+        return candidates;
+    }
+
+    /** Selects only the upward CELL belonging to our alliance as a shooting target. */
+    private List<LLResultTypes.FiducialResult> selectTargetClusterTags(
+            List<ClusterCandidate> candidates, double frameTimestamp) {
         List<LLResultTypes.FiducialResult> empty = new ArrayList<>();
-        if (tags == null || tags.isEmpty()) {
+        if (candidates == null || candidates.isEmpty()) {
             selectedClusterRollDeg = Double.NaN;
             clearPendingCluster();
             return empty;
@@ -1735,17 +1748,12 @@ public class turretSubsystem {
                 ? RED_SCORING_CLUSTER_FIRST_ID : BLUE_AUDIENCE_CLUSTER_FIRST_ID;
         int secondClusterId = alliance == Alliance.RED
                 ? RED_AUDIENCE_CLUSTER_FIRST_ID : BLUE_SCORING_CLUSTER_FIRST_ID;
-        List<LLResultTypes.FiducialResult> firstCluster = new ArrayList<>();
-        List<LLResultTypes.FiducialResult> secondCluster = new ArrayList<>();
-
-        for (LLResultTypes.FiducialResult tag : tags) {
-            int clusterId = clusterFirstIdForTag(tag.getFiducialId());
-            if (clusterId == firstClusterId) firstCluster.add(tag);
-            if (clusterId == secondClusterId) secondCluster.add(tag);
+        ClusterCandidate first = null;
+        ClusterCandidate second = null;
+        for (ClusterCandidate candidate : candidates) {
+            if (candidate.firstId == firstClusterId) first = candidate;
+            if (candidate.firstId == secondClusterId) second = candidate;
         }
-
-        ClusterCandidate first = createClusterCandidate(firstClusterId, firstCluster);
-        ClusterCandidate second = createClusterCandidate(secondClusterId, secondCluster);
         ClusterCandidate selected = chooseScorableCluster(first, second);
         if (selected == null) {
             selectedClusterRollDeg = Double.NaN;
@@ -1768,6 +1776,7 @@ public class turretSubsystem {
                 return empty;
             }
             selectedClusterFirstId = selected.firstId;
+            clearLandmarkLinks();
             resetSideAim();
             targetTicksInitialized = false;
             // Keep the previous field point until updateFusionFromFrame accepts
@@ -1851,14 +1860,156 @@ public class turretSubsystem {
         }
     }
 
+    private static int clusterSlotForFirstId(int firstId) {
+        if (firstId < 30 || firstId > 42 || ((firstId - 30) % 4) != 0) return -1;
+        return (firstId - 30) / 4;
+    }
+
+    private void clearLandmarkLinks() {
+        Arrays.fill(landmarkLinkValid, false);
+        Arrays.fill(landmarkToTargetXIn, Double.NaN);
+        Arrays.fill(landmarkToTargetYIn, Double.NaN);
+        Arrays.fill(landmarkReferenceRollDeg, Double.NaN);
+        Arrays.fill(landmarkLinkLearnedMs, Double.NaN);
+        landmarkLinksTargetClusterFirstId = -1;
+        landmarkVisionActive = false;
+        landmarkSourceClusterFirstId = -1;
+        landmarkStableFrames = 0;
+        lastLandmarkAssistMs = -1;
+    }
+
+    /**
+     * Learns where other visible moving clusters are relative to the current
+     * shooting target. The relation is discarded whenever the target CELL changes.
+     */
+    private void learnLandmarkLinks(
+            double nowMs,
+            double captureTimeMs,
+            double ticksAtCapture,
+            double[] targetMeasurement,
+            List<ClusterCandidate> candidates) {
+        if (!LANDMARK_ASSIST_ENABLED || targetMeasurement == null
+                || selectedClusterFirstId < 0) return;
+
+        if (landmarkLinksTargetClusterFirstId != selectedClusterFirstId) {
+            clearLandmarkLinks();
+            landmarkLinksTargetClusterFirstId = selectedClusterFirstId;
+        }
+        for (ClusterCandidate candidate : candidates) {
+            if (candidate.firstId == selectedClusterFirstId) continue;
+            int slot = clusterSlotForFirstId(candidate.firstId);
+            if (slot < 0) continue;
+            double[] landmarkMeasurement = clusterFieldMeasurement(
+                    candidate, captureTimeMs, ticksAtCapture);
+            if (landmarkMeasurement == null) continue;
+            landmarkToTargetXIn[slot] = targetMeasurement[0] - landmarkMeasurement[0];
+            landmarkToTargetYIn[slot] = targetMeasurement[1] - landmarkMeasurement[1];
+            landmarkReferenceRollDeg[slot] = candidate.rollDeg;
+            landmarkLinkLearnedMs[slot] = nowMs;
+            landmarkLinkValid[slot] = true;
+        }
+    }
+
+    /** Uses the strongest unchanged learned cluster to correct target memory. */
+    private boolean updateFusionFromLandmarks(
+            double nowMs,
+            double captureTimeMs,
+            double ticksAtCapture,
+            List<ClusterCandidate> candidates) {
+        landmarkVisionActive = false;
+        if (!LANDMARK_ASSIST_ENABLED || !fusValid
+                || landmarkLinksTargetClusterFirstId != selectedClusterFirstId) {
+            landmarkStableFrames = 0;
+            landmarkSourceClusterFirstId = -1;
+            return false;
+        }
+
+        ClusterCandidate best = null;
+        for (ClusterCandidate candidate : candidates) {
+            int slot = clusterSlotForFirstId(candidate.firstId);
+            if (slot < 0 || !landmarkLinkValid[slot]) continue;
+            if (nowMs - landmarkLinkLearnedMs[slot]
+                    > Math.max(0, LANDMARK_MAX_LINK_AGE_MS)) continue;
+            double rollDifference = Math.abs(wrapDeg(
+                    candidate.rollDeg - landmarkReferenceRollDeg[slot]));
+            if (rollDifference > Math.max(0, LANDMARK_ROLL_MATCH_DEG)) continue;
+            if (best == null
+                    || candidate.tags.size() > best.tags.size()
+                    || (candidate.tags.size() == best.tags.size()
+                    && candidate.totalArea > best.totalArea)) {
+                best = candidate;
+            }
+        }
+        if (best == null) {
+            landmarkStableFrames = 0;
+            landmarkSourceClusterFirstId = -1;
+            return false;
+        }
+
+        int slot = clusterSlotForFirstId(best.firstId);
+        double[] landmarkMeasurement = clusterFieldMeasurement(
+                best, captureTimeMs, ticksAtCapture);
+        if (landmarkMeasurement == null) {
+            landmarkStableFrames = 0;
+            return false;
+        }
+        double[] inferredTarget = new double[]{
+                landmarkMeasurement[0] + landmarkToTargetXIn[slot],
+                landmarkMeasurement[1] + landmarkToTargetYIn[slot]};
+        boolean accepted = updateFusionFromFieldMeasurement(
+                nowMs, inferredTarget, "landmark-" + best.firstId);
+        if (!accepted) {
+            landmarkStableFrames = 0;
+            return false;
+        }
+
+        if (landmarkSourceClusterFirstId == best.firstId) {
+            landmarkStableFrames++;
+        } else {
+            landmarkSourceClusterFirstId = best.firstId;
+            landmarkStableFrames = 1;
+        }
+        landmarkVisionActive = true;
+        lastLandmarkAssistMs = nowMs;
+        return true;
+    }
+
+    /** Field-space center of any visible CELL cluster at the frame capture time. */
+    private double[] clusterFieldMeasurement(
+            ClusterCandidate candidate,
+            double captureTimeMs,
+            double ticksAtCapture) {
+        ClusterAim aim = calculateClusterAim(
+                candidate.tags, candidate.firstId, false);
+        double distanceIn = aim.horizontalDistanceIn;
+        if (!Double.isFinite(distanceIn)) {
+            int tagId = minimumTagId(candidate.tags);
+            distanceIn = estimateTagFloorForwardFromTy(
+                    aim.averageTyDeg, tagId, candidate.firstId);
+        }
+        if (!Double.isFinite(distanceIn) || distanceIn < 1.0
+                || distanceIn > MAX_DISTANCE_IN) return null;
+        double bearingDeg = aim.txDeg
+                + ticksAtCapture / (AIM_DIRECTION_SIGN * TICKS_PER_DEGREE);
+        return fieldMeasurementFromFrame(captureTimeMs, bearingDeg, distanceIn);
+    }
+
     /** Horizontal aim to the official cluster origin, not to an individual tag. */
     private ClusterAim calculateClusterAim(
             List<LLResultTypes.FiducialResult> tags) {
+        return calculateClusterAim(tags, selectedClusterFirstId, true);
+    }
+
+    /** Same geometry for a non-target cluster, without changing target/side state. */
+    private ClusterAim calculateClusterAim(
+            List<LLResultTypes.FiducialResult> tags,
+            int clusterFirstId,
+            boolean selectedTarget) {
         int count = tags.size();
         double sumTanTx = 0;
         double sumTy = 0;
 
-        updateSideAim(tags);
+        if (selectedTarget) updateSideAim(tags, clusterFirstId);
 
         for (LLResultTypes.FiducialResult tag : tags) {
             double correctedTxDeg = tag.getTargetXDegrees();
@@ -1872,13 +2023,13 @@ public class turretSubsystem {
         // RPM, but filter the copy used by horizontal parallax so Ty noise cannot
         // move the turret setpoint left and right while the robot is stationary.
         double measuredTagPlaneDepthIn = estimateOpticalDepthFromTy(
-                averageTyDeg, selectedTagId);
-        if (!Double.isFinite(measuredTagPlaneDepthIn)) {
+                averageTyDeg, minimumTagId(tags), clusterFirstId);
+        if (selectedTarget && !Double.isFinite(measuredTagPlaneDepthIn)) {
             measuredTagPlaneDepthIn = lastClusterTagPlaneDepthIn;
         }
 
         double aimTagPlaneDepthIn = measuredTagPlaneDepthIn;
-        if (Double.isFinite(measuredTagPlaneDepthIn)
+        if (selectedTarget && Double.isFinite(measuredTagPlaneDepthIn)
                 && Double.isFinite(lastClusterTagPlaneDepthIn)
                 && Math.abs(measuredTagPlaneDepthIn - lastClusterTagPlaneDepthIn)
                 <= AIM_DEPTH_RESEED_DELTA_IN) {
@@ -1901,22 +2052,23 @@ public class turretSubsystem {
             for (LLResultTypes.FiducialResult tag : tags) {
                 double correctedTxDeg = tag.getTargetXDegrees();
                 double tanTx = Math.tan(Math.toRadians(correctedTxDeg));
-                double tagXIn = clusterXForTag(tag.getFiducialId());
+                double tagXIn = clusterXForTag(tag.getFiducialId(), clusterFirstId);
                 aimLateralSum += aimTagPlaneDepthIn * tanTx - tagXIn;
                 measuredLateralSum += measuredTagPlaneDepthIn * tanTx - tagXIn;
             }
             aimClusterLateralIn = aimLateralSum / count;
             measuredClusterLateralIn = measuredLateralSum / count;
-            lastClusterTagPlaneDepthIn = aimTagPlaneDepthIn;
+            if (selectedTarget) lastClusterTagPlaneDepthIn = aimTagPlaneDepthIn;
         }
 
-        clusterGeometryValid = Double.isFinite(aimClusterLateralIn)
+        boolean geometryValid = Double.isFinite(aimClusterLateralIn)
                 && Double.isFinite(measuredClusterLateralIn)
                 && Double.isFinite(aimTagPlaneDepthIn)
                 && Double.isFinite(measuredTagPlaneDepthIn);
+        if (selectedTarget) clusterGeometryValid = geometryValid;
         double centerTxDeg;
         double horizontalDistanceIn = Double.NaN;
-        if (clusterGeometryValid) {
+        if (geometryValid) {
             // SDK cluster coordinates put each tag behind and below the CELL opening
             // origin. Project that field-space offset into the upward-pitched camera.
             double cameraPitchRad = Math.toRadians(CAMERA_UP_ANGLE_DEG);
@@ -1965,7 +2117,8 @@ public class turretSubsystem {
      * is relative to one tag, so adding that tag's cluster X offset produces a
      * common opening-centered coordinate before the observations are averaged.
      */
-    private void updateSideAim(List<LLResultTypes.FiducialResult> tags) {
+    private void updateSideAim(
+            List<LLResultTypes.FiducialResult> tags, int clusterFirstId) {
         double cameraClusterXSumIn = 0;
         int samples = 0;
         for (LLResultTypes.FiducialResult tag : tags) {
@@ -1975,7 +2128,8 @@ public class turretSubsystem {
             double cameraXIn = DistanceUnit.INCH.fromUnit(
                     cameraPosition.unit, cameraPosition.x);
             if (!Double.isFinite(cameraXIn)) continue;
-            cameraClusterXSumIn += cameraXIn + clusterXForTag(tag.getFiducialId());
+            cameraClusterXSumIn += cameraXIn
+                    + clusterXForTag(tag.getFiducialId(), clusterFirstId);
             samples++;
         }
         if (samples == 0) return;
@@ -2040,9 +2194,11 @@ public class turretSubsystem {
         bankAimCorrectionDeg = 0;
     }
 
-    private double estimateOpticalDepthFromTy(double targetYDegrees, int tagId) {
-        double tagAboveCameraIn = tagHeightForId(tagId) - CAMERA_HEIGHT_IN;
-        double floorForwardIn = estimateTagFloorForwardFromTy(targetYDegrees, tagId);
+    private double estimateOpticalDepthFromTy(
+            double targetYDegrees, int tagId, int clusterFirstId) {
+        double tagAboveCameraIn = tagHeightForId(tagId, clusterFirstId) - CAMERA_HEIGHT_IN;
+        double floorForwardIn = estimateTagFloorForwardFromTy(
+                targetYDegrees, tagId, clusterFirstId);
         if (!Double.isFinite(floorForwardIn)) return Double.NaN;
 
         // Convert the field-horizontal distance back to camera optical depth;
@@ -2053,8 +2209,9 @@ public class turretSubsystem {
     }
 
     /** Horizontal camera-to-tag distance used only if full cluster geometry is unavailable. */
-    private double estimateTagFloorForwardFromTy(double targetYDegrees, int tagId) {
-        double tagAboveCameraIn = tagHeightForId(tagId) - CAMERA_HEIGHT_IN;
+    private double estimateTagFloorForwardFromTy(
+            double targetYDegrees, int tagId, int clusterFirstId) {
+        double tagAboveCameraIn = tagHeightForId(tagId, clusterFirstId) - CAMERA_HEIGHT_IN;
         double elevationAngleDeg = CAMERA_UP_ANGLE_DEG + targetYDegrees;
         if (!Double.isFinite(tagAboveCameraIn) || tagAboveCameraIn <= 0
                 || !Double.isFinite(elevationAngleDeg)
@@ -2065,8 +2222,8 @@ public class turretSubsystem {
         return tagAboveCameraIn / Math.tan(Math.toRadians(elevationAngleDeg));
     }
 
-    private double clusterXForTag(int id) {
-        int index = indexOfTag(id);
+    private double clusterXForTag(int id, int clusterFirstId) {
+        int index = indexOfTag(id, clusterFirstId);
         if (index < 0 || index >= CLUSTER_TAG_X_OFFSETS_IN.length) return 0;
 
         // These offsets use the Limelight Tx/image convention and are ordered by
@@ -2088,25 +2245,28 @@ public class turretSubsystem {
         }
     }
 
-    private boolean isAllowedTag(int id) {
-        if (alliance == Alliance.RED) return id >= 30 && id <= 37;
-        return id >= 38 && id <= 45;
-    }
-
     private int clusterFirstIdForTag(int id) {
         if (id < 30 || id > 45) return -1;
         return 30 + ((id - 30) / 4) * 4;
     }
 
-    private int indexOfTag(int id) {
-        int index = id - selectedClusterFirstId;
+    private int indexOfTag(int id, int clusterFirstId) {
+        int index = id - clusterFirstId;
         return index >= 0 && index < 4 ? index : -1;
     }
 
-    private double tagHeightForId(int id) {
-        int index = indexOfTag(id);
+    private double tagHeightForId(int id, int clusterFirstId) {
+        int index = indexOfTag(id, clusterFirstId);
         return index >= 0 && index < TAG_HEIGHTS_IN.length
                 ? TAG_HEIGHTS_IN[index] : DEFAULT_TAG_HEIGHT_IN;
+    }
+
+    private static int minimumTagId(List<LLResultTypes.FiducialResult> tags) {
+        int minimum = Integer.MAX_VALUE;
+        for (LLResultTypes.FiducialResult tag : tags) {
+            minimum = Math.min(minimum, tag.getFiducialId());
+        }
+        return minimum == Integer.MAX_VALUE ? -1 : minimum;
     }
 
     private void updateVisibleTagText(List<LLResultTypes.FiducialResult> tags) {
@@ -2116,11 +2276,11 @@ public class turretSubsystem {
         }
         StringBuilder ids = new StringBuilder();
         for (LLResultTypes.FiducialResult tag : tags) {
-            if (!isAllowedTag(tag.getFiducialId())) continue;
+            if (tag.getFiducialId() < 30 || tag.getFiducialId() > 45) continue;
             if (ids.length() > 0) ids.append(", ");
             ids.append(tag.getFiducialId());
         }
-        visibleTagIds = ids.length() == 0 ? "none allowed" : ids.toString();
+        visibleTagIds = ids.length() == 0 ? "none BIOBUZZ" : ids.toString();
     }
 
     private void saveEncoderSample(double nowMs, int ticks) {
@@ -2169,11 +2329,11 @@ public class turretSubsystem {
         clusterGeometryValid = false;
         aimReady = false;
         stableAimFrames = 0;
+        lastStableVisualMs = -1;
     }
 
     public boolean hasTarget() { return targetVisible; }
-    public boolean isRescanActive() { return rescanActive; }
-    public boolean isFieldHandoffActive() { return fieldHandoffActive; }
+    /** True once the selected target CELL tags have produced a trusted range. */
     public boolean hasDistance() { return distanceInitialized; }
     public boolean hasFieldTargetMemory() { return fusValid; }
     public boolean hasHardLimitFault() { return hardLimitFault; }
@@ -2211,11 +2371,10 @@ public class turretSubsystem {
     /** Re-seeds vision/fusion after a camera, tag, bank, or pivot geometry change. */
     public void refreshAimCalibration() {
         targetTicksInitialized = false;
-        rescanActive = false;
-        fieldHandoffActive = false;
         blindSectorHoldTicks = Double.NaN;
         resetNearTargetStallSafety();
         resetSideAim();
+        clearLandmarkLinks();
         clearFusionPending();
         resetMeasurementHistory(false);
     }
@@ -2230,6 +2389,22 @@ public class turretSubsystem {
     }
     public String getVisibleTagIds() { return visibleTagIds; }
     public int getVisibleTagCount() { return visibleTagCount; }
+    public boolean isLandmarkTrackingActive() {
+        return trackingState == TrackingState.LANDMARK;
+    }
+    public int getLandmarkSourceClusterFirstId() { return landmarkSourceClusterFirstId; }
+    public int getLandmarkLinkCount() {
+        int count = 0;
+        for (boolean valid : landmarkLinkValid) if (valid) count++;
+        return count;
+    }
+    public double getPredictionLeadDeg() { return predictionLeadDeg; }
+    public double getTargetBearingRateDegPerSec() { return fusRateDps; }
+    public double getFieldTargetXIn() { return fusValid ? fusX : Double.NaN; }
+    public double getFieldTargetYIn() { return fusValid ? fusY : Double.NaN; }
+    public boolean isTargetClamped() { return targetClamped; }
+    public boolean isTargetWrapped() { return targetWrapped; }
+    public double getRequestedTargetTicks() { return dbgRequestedTargetTicks; }
     public boolean isClusterGeometryValid() { return clusterGeometryValid; }
     public double getFilteredTxDeg() { return filteredTxDeg; }
     public double getDistanceIn() { return filteredDistanceIn; }
@@ -2247,18 +2422,16 @@ public class turretSubsystem {
     }
     public double getFusedDistanceIn() { return fusDistanceIn; }
     /**
-     * Stable range for the RPM table. Vision seeds/corrects the field target;
-     * odometry updates its distance every loop and carries it through brief occlusion.
+     * Range used by the shooter RPM table. This is measured only from the selected
+     * target CELL tags. Helper/landmark tags and odometry may steer the turret, but
+     * they must never change shooter RPM. If the target tags disappear, retain the
+     * last trusted target-tag range until those target tags return.
      */
     public double getShooterDistanceIn() {
-        // The fused field target already rejects large unconfirmed vision jumps.
-        // Prefer it whenever valid instead of selecting the disagreeing live range.
-        if (hasFusedDistance()) return fusDistanceIn;
         return filteredDistanceIn;
     }
     public double getRobotForwardVelocityInPerSec() { return robotForwardVelocityInPerSec; }
     public double getRobotLeftVelocityInPerSec() { return robotLeftVelocityInPerSec; }
-    public double getRobotFieldYIn() { return robotFieldYIn; }
     public double getRobotHeadingRateDegPerSec() {
         return Math.toDegrees(robotHeadingRateRadPerSec);
     }
@@ -2272,6 +2445,11 @@ public class turretSubsystem {
     public double getTargetAgeMs() {
         return lastTargetSeenMs < 0
                 ? Double.POSITIVE_INFINITY : clock.milliseconds() - lastTargetSeenMs;
+    }
+    public double getVisualCorrectionAgeMs() {
+        double lastVisualCorrectionMs = Math.max(lastTargetSeenMs, lastLandmarkAssistMs);
+        return lastVisualCorrectionMs < 0
+                ? Double.POSITIVE_INFINITY : clock.milliseconds() - lastVisualCorrectionMs;
     }
     public double getLastVisionErrorDeg() { return lastVisionErrorDeg; }
     public double getLastLatencyMs() { return lastLatencyMs; }
@@ -2296,8 +2474,6 @@ public class turretSubsystem {
     public void stop() {
         turretMotor.setPower(0);
         lastWrittenPower = 0;
-        rescanActive = false;
-        fieldHandoffActive = false;
         blindSectorHoldTicks = Double.NaN;
         resetNearTargetStallSafety();
         writeIndicatorPosition(LED_MANUAL_POSITION);

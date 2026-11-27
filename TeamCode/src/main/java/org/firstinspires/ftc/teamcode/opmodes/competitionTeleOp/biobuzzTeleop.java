@@ -24,10 +24,6 @@ public abstract class biobuzzTeleop extends LinearOpMode {
     private static final double DRIVE_STICK_DEADBAND = 0.05;
     private static final double DASHBOARD_PERIOD_SECONDS = 0.050;
     private static final double OUTTAKE_CURRENT_SAMPLE_SECONDS = 0.100;
-    /** Pedro/Pinpoint field frame is 0..144 inches along Y. */
-    private static final double FIELD_CENTER_Y_IN = 72.0;
-    /** Prevent odometry noise near midfield from switching sides repeatedly. */
-    private static final double FIELD_SIDE_HYSTERESIS_IN = 6.0;
 
     private FlightRecorder rec;
     private turretSubsystem turret;
@@ -44,10 +40,7 @@ public abstract class biobuzzTeleop extends LinearOpMode {
     private boolean lastLeftTrigger = false;
     private boolean lastLeftBumper = false;
     private boolean lastTurretZeroButton = false;
-    private boolean lastRescanButton = false;
     private boolean autoAimEnabled = true;
-    /** -1 = lower-Y half, +1 = upper-Y half, 0 = not initialized yet. */
-    private int trackedFieldSide = 0;
 
     protected abstract turretSubsystem.Alliance competitionAlliance();
 
@@ -110,7 +103,6 @@ public abstract class biobuzzTeleop extends LinearOpMode {
         lastLeftTrigger = gamepad1.left_trigger > 0.5;
         lastLeftBumper = gamepad1.left_bumper;
         lastTurretZeroButton = gamepad1.start;
-        lastRescanButton = gamepad1.y;
 
         try {
             while (opModeIsActive()) {
@@ -171,21 +163,10 @@ public abstract class biobuzzTeleop extends LinearOpMode {
                 lastTurretZeroButton = turretZeroPressed;
                 turret.setAutoAimEnabled(autoAimEnabled);
 
-                boolean rescanPressed = gamepad1.y;
-                if (rescanPressed && !lastRescanButton) {
-                    autoAimEnabled = true;
-                    turret.beginFullRangeRescan();
-                }
-                lastRescanButton = rescanPressed;
-
-                boolean turretPaused = gamepad1.back;
-                turret.setMovementPaused(turretPaused);
-
                 double manualTurretCommand = (gamepad1.dpad_right ? 1.0 : 0.0)
                         - (gamepad1.dpad_left ? 1.0 : 0.0);
                 turret.setManualPower(manualTurretCommand * MANUAL_TURRET_POWER);
                 turret.update(dtSeconds);
-                updateAutomaticFieldHandoff();
 
                 // Keep readiness as telemetry for the driver/log, but A always owns
                 // forward transfer directly. The driver decides when to release a shot.
@@ -230,9 +211,6 @@ public abstract class biobuzzTeleop extends LinearOpMode {
                 rec.put("in_lateral", lateral);
                 rec.put("in_turn", turn);
                 rec.put("in_autoaim", autoAimEnabled);
-                rec.put("in_turret_paused", turretPaused);
-                rec.put("in_rescan", rescanPressed);
-                rec.put("field_side", trackedFieldSide);
                 rec.put("in_dpad_manual", manualTurretCommand);
                 rec.put("in_intake_on", intakeToggle);
                 rec.put("in_outtake_on", outtakeToggle);
@@ -249,25 +227,38 @@ public abstract class biobuzzTeleop extends LinearOpMode {
                         transferCommand, transferRpm);
 
                 telemetry.addData("Turret Mode", autoAimEnabled ? "AUTO-AIM" : "MANUAL");
-                telemetry.addData("Turret Pause", turretPaused
-                        ? "HELD - tracking continues, motor stopped" : "released");
-                telemetry.addData("Turret Rescan", turret.isRescanActive()
-                        ? "SEARCHING FULL SAFE RANGE" : "inactive");
-                telemetry.addData("Automatic Field Handoff", turret.isFieldHandoffActive()
-                        ? "TURNING 180" : "ready");
-                telemetry.addData("Tracked Field Side", trackedFieldSide < 0
-                        ? "LOW-Y" : trackedFieldSide > 0 ? "HIGH-Y" : "INITIALIZING");
                 telemetry.addData("Aim Source", "%s (%s)",
                         turret.getTrackingState(), turret.getTrackingStateReason());
                 telemetry.addData("Target Visible", turret.hasTarget()
                         ? "YES (ID: " + turret.getSelectedTagId() + ")"
+                        : turret.isLandmarkTrackingActive()
+                          ? "LANDMARK TAGS (target IDs hidden)"
                         : turret.isOdometryTrackingActive()
                           ? "ODOMETRY MEMORY" : "NO");
+                telemetry.addData("Landmark Assist", "links=%d sourceCluster=%d active=%s",
+                        turret.getLandmarkLinkCount(),
+                        turret.getLandmarkSourceClusterFirstId(),
+                        turret.isLandmarkTrackingActive());
+                telemetry.addData("Velocity Prediction", "rate=%+.1f deg/s lead=%+.2f deg",
+                        turret.getTargetBearingRateDegPerSec(),
+                        turret.getPredictionLeadDeg());
+                telemetry.addData("Visual Correction Age", "%.0f / %.0f ms ready window",
+                        turret.getVisualCorrectionAgeMs(),
+                        turretSubsystem.VISUAL_READY_MAX_AGE_MS);
                 telemetry.addData("Hive Field Memory",
                         !turret.hasFieldTargetMemory() ? "EMPTY"
                                 : turret.isOdometryPoseValid()
                                   ? "SAVED / TRACKING"
-                                  : "SAVED / ODOMETRY PAUSED");
+                                  : "SAVED / ODOMETRY INVALID");
+                telemetry.addData("Hive Field Point", turret.hasFieldTargetMemory()
+                        ? String.format(java.util.Locale.US, "x=%.1f y=%.1f in",
+                                turret.getFieldTargetXIn(), turret.getFieldTargetYIn())
+                        : "EMPTY");
+                telemetry.addData("Turret Reachability", turret.isTargetClamped()
+                        ? String.format(java.util.Locale.US,
+                                "UNREACHABLE %.1f -> %.1f ticks; TURN ROBOT TOWARD HIVE",
+                                turret.getRequestedTargetTicks(), turret.getTargetTicks())
+                        : "reachable");
                 telemetry.addData("Turret Ticks", "current=%d target=%.1f limits=[%d, %d]",
                         turret.getCurrentTicks(), turret.getTargetTicks(),
                         turretSubsystem.MIN_TURRET_TICKS,
@@ -279,7 +270,7 @@ public abstract class biobuzzTeleop extends LinearOpMode {
                         ? "HARD LIMIT: auto blocked; use manual only toward center, then START"
                         : "relative limits OK");
                 telemetry.addData("Turret Zero", "press START only while mechanically centered");
-                telemetry.addData("Allowed visible IDs", turret.getVisibleTagIds());
+                telemetry.addData("All BIOBUZZ IDs", turret.getVisibleTagIds());
                 telemetry.addData("Alliance / CELL", "%s / %s",
                         turret.getAlliance(), turret.getSelectedClusterName());
                 telemetry.addData("CELL Roll", Double.isFinite(turret.getSelectedClusterRollDeg())
@@ -304,11 +295,11 @@ public abstract class biobuzzTeleop extends LinearOpMode {
                                 : "NO VALID RANGE (RPM fallback active)");
                 telemetry.addData("Range Source",
                         turret.hasDistance() && Double.isFinite(shooterDistanceIn)
-                                ? turret.hasFusedDistance()
-                                  ? turret.hasTarget()
-                                    ? "FUSED (VISION-CORRECTED)"
-                                    : "ODOMETRY TARGET MEMORY"
-                                  : "FILTERED LIVE VISION"
+                                ? turret.isDistanceFrozenAfterShot()
+                                  ? "HELD TARGET-TAG RANGE (SHOT)"
+                                  : turret.hasTarget()
+                                    ? "SELECTED TARGET CELL TAGS"
+                                    : "HELD LAST TARGET-TAG RANGE"
                                 : turret.hasTarget()
                                   ? "TAG VISIBLE; CAMERA GEOMETRY INVALID"
                                   : "NO ALLOWED TAG");
@@ -385,15 +376,26 @@ public abstract class biobuzzTeleop extends LinearOpMode {
         packet.put("turret.current_ticks", turret.getCurrentTicks());
         packet.put("turret.raw_encoder_ticks", turret.getRawEncoderTicks());
         packet.put("turret.zero_offset_ticks", turret.getEncoderZeroTicks());
+        packet.put("turret.requested_target_ticks", turret.getRequestedTargetTicks());
         packet.put("turret.target_ticks", turret.getTargetTicks());
+        packet.put("turret.target_clamped", turret.isTargetClamped() ? 1.0 : 0.0);
+        packet.put("turret.field_target_x_in", turret.getFieldTargetXIn());
+        packet.put("turret.field_target_y_in", turret.getFieldTargetYIn());
         packet.put("turret.error_ticks", turret.getPositionErrorTicks());
         packet.put("turret.velocity_tps", turret.getFilteredMotorVelocityTicksPerSecond());
         packet.put("turret.power", turret.getAppliedPower());
         packet.put("turret.tx_deg", turret.getFilteredTxDeg());
         packet.put("turret.aim_ready", turret.isAimReady() ? 1.0 : 0.0);
-        packet.put("turret.paused",
-                turret.getTrackingState() == turretSubsystem.TrackingState.PAUSED ? 1.0 : 0.0);
+        packet.put("turret.visual_correction_age_ms", turret.getVisualCorrectionAgeMs());
         packet.put("turret.target_visible", turret.hasTarget() ? 1.0 : 0.0);
+        packet.put("turret.landmark_active",
+                turret.isLandmarkTrackingActive() ? 1.0 : 0.0);
+        packet.put("turret.landmark_links", turret.getLandmarkLinkCount());
+        packet.put("turret.landmark_source_cluster",
+                turret.getLandmarkSourceClusterFirstId());
+        packet.put("turret.target_rate_deg_s",
+                turret.getTargetBearingRateDegPerSec());
+        packet.put("turret.prediction_lead_deg", turret.getPredictionLeadDeg());
         packet.put("turret.field_memory_valid", turret.hasFieldTargetMemory() ? 1.0 : 0.0);
         packet.put("turret.hard_limit_fault", turret.hasHardLimitFault() ? 1.0 : 0.0);
         packet.put("turret.odometry_pose_valid", turret.isOdometryPoseValid() ? 1.0 : 0.0);
@@ -416,42 +418,6 @@ public abstract class biobuzzTeleop extends LinearOpMode {
         dashboard.sendTelemetryPacket(packet);
     }
 
-    /** Automatically changes CELL when accepted odometry crosses the field center. */
-    private void updateAutomaticFieldHandoff() {
-        if (!turret.isOdometryPoseValid()) return;
-
-        double y = turret.getRobotFieldYIn();
-        int observedSide;
-        if (y < FIELD_CENTER_Y_IN - FIELD_SIDE_HYSTERESIS_IN) {
-            observedSide = -1;
-        } else if (y > FIELD_CENTER_Y_IN + FIELD_SIDE_HYSTERESIS_IN) {
-            observedSide = 1;
-        } else {
-            // Stay on the previous side inside the 12-inch center guard band.
-            return;
-        }
-
-        if (trackedFieldSide == 0) {
-            trackedFieldSide = observedSide;
-            rec.event(String.format(java.util.Locale.US,
-                    "FIELD_SIDE_INIT side=%+d y=%.1f", trackedFieldSide, y));
-            return;
-        }
-        if (observedSide == trackedFieldSide) return;
-
-        int previousSide = trackedFieldSide;
-        trackedFieldSide = observedSide;
-        rec.event(String.format(java.util.Locale.US,
-                "FIELD_SIDE_CROSS old=%+d new=%+d y=%.1f",
-                previousSide, trackedFieldSide, y));
-
-        // A driver-requested recovery scan already owns the turret. Record the
-        // new side, but do not interrupt that safer search.
-        if (turret.isRescanActive()) return;
-        autoAimEnabled = true;
-        turret.beginOppositeFieldHandoff();
-    }
-
     private void putIfFinite(TelemetryPacket packet, String key, double value) {
         if (Double.isFinite(value)) packet.put(key, value);
     }
@@ -468,11 +434,10 @@ public abstract class biobuzzTeleop extends LinearOpMode {
         telemetry.addLine("RT (tap): Toggle intake | RB (hold): Reverse intake");
         telemetry.addLine("LT (tap): Toggle flywheel | A (hold): Transfer forward | X (hold): Reverse transfer");
         telemetry.addLine("LB (tap): Toggle auto/manual (starts AUTO)");
-        telemetry.addLine("Y (tap): discard hive memory and rescan full safe turret range");
         telemetry.addLine("D-pad L/R: Move turret while in manual mode");
-        telemetry.addLine("BACK (hold): pause turret movement while tracking continues");
         telemetry.addLine("START: set current turret position to 0 (mode unchanged)");
-        telemetry.addLine("Auto-aim moves turret only; right stick owns chassis turn");
-        telemetry.addLine("LED: blue=manual, red=aligning, yellow=odometry lock, green=live vision lock");
+        telemetry.addLine("Keep a HIVE in camera view; right stick owns chassis turn");
+        telemetry.addLine("A always feeds; Aim Ready is advisory only");
+        telemetry.addLine("LED: blue=manual, red=aligning, yellow=landmark/odometry lock, green=direct target lock");
     }
 }

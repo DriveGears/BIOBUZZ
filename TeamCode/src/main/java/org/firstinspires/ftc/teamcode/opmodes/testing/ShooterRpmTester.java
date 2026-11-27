@@ -254,21 +254,20 @@ public class ShooterRpmTester extends LinearOpMode {
 
     private String distanceStatus(turretSubsystem turret) {
         if (turret.hasDistance() && Double.isFinite(turret.getShooterDistanceIn())) {
-            if (turret.isDistanceFrozenAfterShot()) return "SHOT HOLD: LAST TRUSTED RANGE";
-            if (turret.hasFusedDistance()) {
-                return turret.hasTarget()
-                        ? "FUSED RANGE (VISION + ODOMETRY)"
-                        : "ODOMETRY-TRACKED RANGE";
+            if (turret.isDistanceFrozenAfterShot()) {
+                return "SHOT HOLD: LAST TARGET-TAG RANGE";
             }
-            return "FILTERED VISION RANGE";
+            return turret.hasTarget()
+                    ? "SELECTED TARGET CELL TAG RANGE"
+                    : "HELD LAST TARGET-TAG RANGE (NO HELPER/ODO RPM UPDATE)";
         }
         if (turret.hasTarget()) {
             return "TAG FOUND, BUT CAMERA HEIGHT/ANGLE DID NOT PRODUCE A RANGE";
         }
         String ids = turret.getVisibleTagIds();
-        if (ids != null && !ids.equals("none") && !ids.equals("none allowed")) {
+        if (ids != null && !ids.equals("none") && !ids.equals("none BIOBUZZ")) {
             return "TAG SEEN, BUT CELL ORIENTATION WAS REJECTED";
         }
-        return "NO ALLOWED TAG: aim camera at HIVE; X=RED, Y=BLUE";
+        return "NO TARGET CELL: aim camera at HIVE; X=RED, Y=BLUE";
     }
 }
