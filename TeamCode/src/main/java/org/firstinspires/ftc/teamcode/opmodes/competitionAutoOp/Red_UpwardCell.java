@@ -45,10 +45,10 @@ public class Red_UpwardCell extends OpMode {
     //Poses
     private final Pose startPose = poseFactory.of(32.0, 9.1, 180);
     private final Pose flowerLineupPose = poseFactory.of(11.6, 55, 195.3); //x = 7.6, y, 58
-    private final Pose flowerPose = poseFactory.of(4.5, 55.9, 189.5);//x=3
-    private final Pose flower2LineupPose = poseFactory.of(33.3, 126.0, 81.1); //y=124
+    private final Pose flowerPose = poseFactory.of(4.5, 55.6, 189.5);//x=3
+    private final Pose flower2LineupPose = poseFactory.of(35.35, 126.0, 81.1); //y=124
 //    private final Pose flowerPose2 = poseFactory.of(31.5, 131.8, 81.5);og
-    private final Pose flowerPose2 = poseFactory.of( 33.2, 130.09, 80.04); //35.35 too far right
+    private final Pose flowerPose2 = poseFactory.of( 33.6, 130.7, 80.04); //35.35 too far right
 
     private final Pose parkPose = poseFactory.of(2.0, 121.2, 359.7);
 
@@ -90,6 +90,7 @@ public class Red_UpwardCell extends OpMode {
         return sequential(
                 instant(() -> {
                     shotSkipped = false;
+                    // Intake on: it is what feeds balls into the transfer.
                     robot.intake.setPower(INTAKE_POWER);
                     shooter.setTargetRpm(targetRpm);
                     shooter.setShooterEnabled(true);
@@ -111,8 +112,8 @@ public class Red_UpwardCell extends OpMode {
     }
     private Command autoRoutine() {
         return sequential(
-                // 1. At start pose: spin up, aim, shoot the preload.
-                shootAtUpwardCell(shooterSubsystem.COMPETITION_RPM),
+                // 1. At start pose: spin up, aim, shoot the preload (3000 RPM).
+                shootAtUpwardCell(2900.0),
                 // 2. Move to flower lineup: turn off transfer, disable auto-aim during transit
                 instant(() -> {
                     robot.transfer.setPower(0);
@@ -126,16 +127,16 @@ public class Red_UpwardCell extends OpMode {
                 drive(flowerLineupToFlower(), DRIVE_TO_FLOWER1_MS),
                 // 5. Collect from flower
                 collectFromFlower(),
-                // 6. Flower 2 lineup & shoot (Uses AUTO_RPM)
+                // 6. Flower 2 lineup & shoot (2900 RPM)
                 instant(() -> turret.setAutoAimEnabled(false)),
                 drive(flowerToLineup(), DRIVE_TO_FLOWER2_LINEUP_MS),
                 waitMs(SETTLE_MS),
-                shootAtUpwardCell(shooterSubsystem.AUTO_RPM),
-                // 7. Flower 2 collect & shoot (Uses AUTO_RPM)
+                shootAtUpwardCell(2900.0),
+                // 7. Flower 2 collect & shoot (2900 RPM)
                 instant(() -> turret.setAutoAimEnabled(false)),
                 drive(lineupToFlower2(), DRIVE_TO_FLOWER2_MS),
                 collectFromFlower(),
-                shootAtUpwardCell(shooterSubsystem.AUTO_RPM),
+                shootAtUpwardCell(2900.0),
                 // 8. Park
                 instant(() -> {
                     shooter.setShooterEnabled(false);
@@ -155,7 +156,7 @@ public class Red_UpwardCell extends OpMode {
         turret = new turretSubsystem(robot);
         shooter = new shooterSubsystem(robot);
         turret.setAlliance(turretSubsystem.Alliance.RED);
-        shooter.setTargetRpm(shooterSubsystem.COMPETITION_RPM);
+        shooter.setTargetRpm(3000.0);
         follower.setPose(startPose);
         follower.update();
         loopTimer.reset();
@@ -172,6 +173,7 @@ public class Red_UpwardCell extends OpMode {
         follower.update();
         telemetry.addData("Status", "Ready - Keep robot still before Play");
         telemetry.addData("Pollen", "Arrange Flat");
+        telemetry.addData("Battery", "No > 13.3V, No < 12.6V");
         telemetry.addData("Alliance", turret.getAlliance());
         telemetry.addData("Turret Ticks (Manual Test - 210)", robot.getTurretPositionTicks());
         telemetry.addData("X", follower.pose().x());
@@ -190,11 +192,7 @@ public class Red_UpwardCell extends OpMode {
         loopTimer.reset();
         Scheduler.execute();
         follower.update();
-        if (turret.hasDistance()) {
-            shooter.setTargetForDistance(turret.getShooterDistanceIn());
-        } else {
-            shooter.setTargetRpm(shooterSubsystem.COMPETITION_RPM);
-        }
+        // Hardcoded RPMs are managed by shootAtUpwardCell; no distance override here.
         shooter.update(dtSeconds);
         turret.update(dtSeconds);
         telemetry.addData("X", follower.pose().x());

@@ -115,7 +115,7 @@ public class turretSubsystem {
      */
     public static double BANK_AIM_CENTER_OFFSET_IN = 0.0;
     public static double BANK_AIM_MAX_OFFSET_IN = 0.0;
-    public static double BANK_AIM_FULL_SIDE_IN = 8.0;
+    public static double BANK_AIM_FULL_SIDE_IN = 3.0;//
     public static double BANK_AIM_SWITCH_HYSTERESIS_IN = 3.0;
     public static double BANK_AIM_SWITCH_HOLD_MS = 750.0;
     /** One filter for side-position geometry; the bank command itself is not filtered again. */
