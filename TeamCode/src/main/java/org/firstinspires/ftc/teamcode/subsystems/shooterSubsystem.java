@@ -4,7 +4,7 @@ import com.qualcomm.robotcore.hardware.DcMotor;
 
 import org.firstinspires.ftc.teamcode.hardware.Hardware;
 
-/** Controls OUTTAKE RPM using software PIDF in RUN_WITHOUT_ENCODER mode and runs intake/transfer. */
+/** Controls flywheel RPM using software PIDF in RUN_WITHOUT_ENCODER mode. */
 public class shooterSubsystem {
 
     // ========================= VALUES TO CALIBRATE =========================
@@ -15,30 +15,42 @@ public class shooterSubsystem {
     /** Motor revolutions per OUTTAKE revolution. Use 1.0 for a direct drive. */
     public static final double MOTOR_REVS_PER_OUTTAKE_REV = 1.0;
 
-    /** Change either sign if an intake mechanism runs backward. */
-    public static final double INTAKE_POWER = 1.0;
-    public static final double TRANSFER_POWER = 0.64;
+    /** Normal field baseline used as a reference for the calibrated table below. */
+    public static final double COMPETITION_RPM = 2900;
 
-    /** Competition shooter speed. Distance-based RPM selection is intentionally disabled. */
-    public static final double COMPETITION_RPM = 2100.0;
-
-    /** Distances and RPMs are paired. Measure new values for this year's mechanism. */
+    /**
+     * Exponential-like calibration: RPM rises gently through normal shooting
+     * positions, then the slope increases toward the far corners. Linear interpolation
+     * between these points approximates the curve without adding another tuning model.
+     */
     public static final double[] SHOT_DISTANCE_IN = {
-            38, 40, 42, 58, 60, 82, 90, 92, 98, 120, 132
+            95, 115, 140, 180
     };
     public static final double[] SHOT_RPM = {
-            1500, 1500, 1565, 1810, 1855, 2070, 2170, 2185, 2280, 2615, 2680
+            2875, 2900, 2900, 3000
     };
 
-    // Software PIDF Gains (RUN_WITHOUT_ENCODER motor mode)
-    private static final double KP = 0.0020;
-    private static final double KI = 0.0005;
-    private static final double KD = 0.0001;
-    private static final double KF = 0.000435;
-    private static final double MAX_INTEGRAL_SUM = 200.0;
+    // Competition PIDF defaults (RUN_WITHOUT_ENCODER motor mode).
+    public static final double DEFAULT_KP = 0.003; // 0.0014
+    /** Small trim only; a larger integral caused a +100 RPM rebound after each shot. */
+    public static final double DEFAULT_KI = 0.00015;
+    public static final double DEFAULT_KD = 0.0; // 0.0001
+    /**
+     * Log-calibrated at 2900 RPM: 0.000430 settled around 2931 RPM and contributed
+     * to the post-shot rebound. P supplies the temporary recovery torque.
+     */
+    public static final double DEFAULT_KF = 0.000395;
+    /** Integral only corrects small steady errors; it must not build during spin-up. */
+    public static final double INTEGRAL_ZONE_RPM = 60.0;
+    private static final double MAX_INTEGRAL_SUM = 150.0;
+
+    /** Extra torque only while the transfer is feeding and a shot has pulled RPM down. */
+    public static final double FEED_RECOVERY_POWER_BOOST = 0.05;
+    /** Avoid switching the boost on for ordinary encoder quantization near the setpoint. */
+    public static final double FEED_RECOVERY_MIN_ERROR_RPM = 75.0;
 
     /** Maximum allowed request and how quickly the commanded RPM may change. */
-    public static final double MAX_RPM = 3400.0;
+    public static final double MAX_RPM = 3700.0;
     public static final double SPIN_UP_RPM_PER_SECOND = 15000.0;
     public static final double SPIN_DOWN_RPM_PER_SECOND = 10000.0;
 
@@ -62,7 +74,17 @@ public class shooterSubsystem {
 
     private double integralSum = 0.0;
     private double lastError = 0.0;
+    private double kP = DEFAULT_KP;
+    private double kI = DEFAULT_KI;
+    private double kD = DEFAULT_KD;
+    private double kF = DEFAULT_KF;
 
+    private double pTerm;
+    private double iTerm;
+    private double dTerm;
+    private double fTerm;
+    private double recoveryBoostPower;
+    private double appliedPower;
     public shooterSubsystem(Hardware robot) {
         if (SHOT_DISTANCE_IN.length != SHOT_RPM.length || SHOT_DISTANCE_IN.length == 0) {
             throw new IllegalStateException("SHOT_DISTANCE_IN and SHOT_RPM must have equal lengths");
@@ -70,26 +92,20 @@ public class shooterSubsystem {
 
         this.robot = robot;
         robot.outtake.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
-        stopMotors();
+        robot.setShooterIndicatorEnabled(false);
+        stopFlywheel();
     }
 
-    public void setEnabled(boolean enabled) {
-        setShooterEnabled(enabled);
-        robot.intake.setPower(enabled ? INTAKE_POWER : 0);
-        robot.transfer.setPower(enabled ? TRANSFER_POWER : 0);
-    }
-
-    /** Controls only the flywheel so TeleOp/Auto can operate intake and transfer separately. */
     public void setShooterEnabled(boolean enabled) {
         if (this.enabled == enabled) return;
         this.enabled = enabled;
+        robot.setShooterIndicatorEnabled(enabled);
 
         if (!enabled) {
             commandedRpm = 0;
             readyLoops = 0;
             atSpeed = false;
-            robot.outtake.setPower(0);
-            resetPID();
+            stopFlywheel();
         }
     }
 
@@ -99,8 +115,18 @@ public class shooterSubsystem {
 
     /** Uses the calibration table to select an RPM for a measured/predicted distance. */
     public void setTargetForDistance(double distanceIn) {
-        distanceBucketIn = distanceIn;
-        setTargetRpm(COMPETITION_RPM);
+        if (!Double.isFinite(distanceIn) || distanceIn <= 0) {
+            distanceBucketIn = Double.NaN;
+            setTargetRpm(COMPETITION_RPM);
+            return;
+        }
+
+        if (!Double.isFinite(distanceBucketIn)
+                || Math.abs(distanceIn - distanceBucketIn) > DISTANCE_HYSTERESIS_IN) {
+            distanceBucketIn = Math.round(distanceIn / DISTANCE_BUCKET_IN)
+                    * DISTANCE_BUCKET_IN;
+        }
+        setTargetRpm(rpmForDistance(distanceBucketIn));
     }
 
     /** Useful for test tuning without the camera. */
@@ -128,7 +154,9 @@ public class shooterSubsystem {
 
     /** Call once per OpMode loop. */
     public void update(double dtSeconds) {
-        if (!enabled) return;
+        if (!enabled) {
+            return;
+        }
 
         double dt = clamp(dtSeconds, 0.001, 0.100);
         double slewRate = targetRpm >= commandedRpm
@@ -139,23 +167,48 @@ public class shooterSubsystem {
         double targetTPS = rpmToTicksPerSecond(commandedRpm);
         double actualTPS = robot.outtake.getVelocity();
         double errorTPS = targetTPS - actualTPS;
+        double errorRpm = ticksPerSecondToRpm(errorTPS);
 
-        double pTerm = KP * errorTPS;
-        integralSum += errorTPS * dt;
-        integralSum = Math.max(-MAX_INTEGRAL_SUM, Math.min(MAX_INTEGRAL_SUM, integralSum));
-        double iTerm = KI * integralSum;
+        // Do not carry positive recovery torque past the setpoint. Flywheel inertia
+        // already continues accelerating briefly after the error changes sign.
+        if (errorTPS * lastError < 0.0) {
+            integralSum = 0.0;
+        }
 
+        pTerm = kP * errorTPS;
         double derivative = (errorTPS - lastError) / dt;
-        double dTerm = KD * derivative;
+        dTerm = kD * derivative;
+        fTerm = kF * targetTPS;
 
-        double fTerm = KF * targetTPS;
+        // Reset stored torque outside the narrow steady-state zone. Inside the
+        // zone, accept integration only when it does not push farther into a
+        // saturated output. This removes the slow +RPM settle after spin-up.
+        if (Math.abs(errorRpm) > INTEGRAL_ZONE_RPM) {
+            integralSum = 0.0;
+        } else {
+            double candidateIntegralSum = clamp(
+                    integralSum + errorTPS * dt,
+                    -MAX_INTEGRAL_SUM, MAX_INTEGRAL_SUM);
+            double candidateITerm = kI * candidateIntegralSum;
+            double candidatePower = pTerm + candidateITerm + dTerm + fTerm;
+            boolean pushesHighSaturation = candidatePower > 1.0 && errorTPS > 0;
+            boolean pushesLowSaturation = candidatePower < 0.0 && errorTPS < 0;
+            if (!pushesHighSaturation && !pushesLowSaturation) {
+                integralSum = candidateIntegralSum;
+            }
+        }
+        iTerm = kI * integralSum;
 
-        double motorPower = pTerm + iTerm + dTerm + fTerm;
-        motorPower = clamp(motorPower, -1.0, 1.0);
-        robot.outtake.setPower(motorPower);
+        boolean transferFeeding = robot.transfer.getPower() > 0.05;
+        recoveryBoostPower = transferFeeding && errorRpm >= FEED_RECOVERY_MIN_ERROR_RPM
+                ? FEED_RECOVERY_POWER_BOOST : 0.0;
+        double motorPower = pTerm + iTerm + dTerm + fTerm + recoveryBoostPower;
+        // A flywheel only needs forward power. Negative PID output would actively brake it.
+        appliedPower = clamp(motorPower, 0.0, 1.0);
+        robot.outtake.setPower(appliedPower);
         lastError = errorTPS;
 
-        double actualRpm = getActualRpm();
+        double actualRpm = ticksPerSecondToRpm(actualTPS);
         if (Math.abs(actualRpm - targetRpm) <= READY_TOLERANCE_RPM) {
             readyLoops++;
         } else {
@@ -184,15 +237,98 @@ public class shooterSubsystem {
         return distanceBucketIn;
     }
 
-    public void stop() {
-        enabled = false;
-        stopMotors();
+    /** Changes this instance's gains immediately; intended for the temporary tuning OpMode. */
+    public void setPidfGains(double kP, double kI, double kD, double kF) {
+        this.kP = nonNegativeFinite(kP);
+        this.kI = nonNegativeFinite(kI);
+        this.kD = nonNegativeFinite(kD);
+        this.kF = nonNegativeFinite(kF);
+        resetPID();
     }
 
-    private void stopMotors() {
+    public void resetPidfGains() {
+        setPidfGains(DEFAULT_KP, DEFAULT_KI, DEFAULT_KD, DEFAULT_KF);
+    }
+
+    public double getKp() {
+        return kP;
+    }
+
+    public double getKi() {
+        return kI;
+    }
+
+    public double getKd() {
+        return kD;
+    }
+
+    public double getKf() {
+        return kF;
+    }
+
+    public double getPTerm() {
+        return pTerm;
+    }
+
+    public double getITerm() {
+        return iTerm;
+    }
+
+    public double getDTerm() {
+        return dTerm;
+    }
+
+    public double getFTerm() {
+        return fTerm;
+    }
+
+    public double getRecoveryBoostPower() {
+        return recoveryBoostPower;
+    }
+
+    public double getAppliedPower() {
+        return appliedPower;
+    }
+
+    /** Adds the complete controller state to a flight-recorder row for PIDF tuning. */
+    public void logTo(FlightRecorder recorder) {
+        double actualRpm = getActualRpm();
+        recorder.put("shoot_enabled", enabled);
+        recorder.put("shoot_target_rpm", targetRpm);
+        recorder.put("shoot_distance_bucket_in", distanceBucketIn);
+        recorder.put("shoot_cmd_rpm", commandedRpm);
+        recorder.put("shoot_actual_rpm", actualRpm);
+        recorder.put("shoot_error_rpm", targetRpm - actualRpm);
+        recorder.put("shoot_at_speed", atSpeed);
+        recorder.put("shoot_power", appliedPower);
+        recorder.put("shoot_p", pTerm);
+        recorder.put("shoot_i", iTerm);
+        recorder.put("shoot_d", dTerm);
+        recorder.put("shoot_f", fTerm);
+        recorder.put("shoot_recovery_boost", recoveryBoostPower);
+        recorder.put("shoot_kp", kP);
+        recorder.put("shoot_ki", kI);
+        recorder.put("shoot_kd", kD);
+        recorder.put("shoot_kf", kF);
+    }
+
+    public void stop() {
+        enabled = false;
+        robot.setShooterIndicatorEnabled(false);
+        commandedRpm = 0;
+        readyLoops = 0;
+        atSpeed = false;
+        stopFlywheel();
+    }
+
+    private void stopFlywheel() {
         robot.outtake.setPower(0);
-        robot.intake.setPower(0);
-        robot.transfer.setPower(0);
+        pTerm = 0;
+        iTerm = 0;
+        dTerm = 0;
+        fTerm = 0;
+        recoveryBoostPower = 0;
+        appliedPower = 0;
         resetPID();
     }
 
@@ -214,4 +350,9 @@ public class shooterSubsystem {
     private double clamp(double value, double min, double max) {
         return Math.max(min, Math.min(max, value));
     }
+
+    private double nonNegativeFinite(double value) {
+        return Double.isFinite(value) ? Math.max(0, value) : 0;
+    }
+
 }
