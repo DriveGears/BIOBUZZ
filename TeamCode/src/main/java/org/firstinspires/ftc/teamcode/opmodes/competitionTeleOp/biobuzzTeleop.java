@@ -38,7 +38,7 @@ public abstract class biobuzzTeleop extends LinearOpMode {
     private boolean outtakeToggle = false;
     private boolean lastRightTrigger = false;
     private boolean lastLeftTrigger = false;
-    private boolean lastLeftBumper = false;
+    private boolean lastManualAimButton = false;
     private boolean lastTurretZeroButton = false;
     private boolean autoAimEnabled = true;
 
@@ -101,7 +101,7 @@ public abstract class biobuzzTeleop extends LinearOpMode {
         outtakeCurrentTimer.reset();
         lastRightTrigger = gamepad1.right_trigger > 0.5;
         lastLeftTrigger = gamepad1.left_trigger > 0.5;
-        lastLeftBumper = gamepad1.left_bumper;
+        lastManualAimButton = gamepad1.y;
         lastTurretZeroButton = gamepad1.start;
 
         try {
@@ -145,12 +145,12 @@ public abstract class biobuzzTeleop extends LinearOpMode {
                 boolean transferRequested = gamepad1.a;
                 boolean transferReverse = gamepad1.x;
 
-                // Auto-aim starts enabled. Tap LB to switch to/from manual aiming.
-                boolean currentLeftBumper = gamepad1.left_bumper;
-                if (currentLeftBumper && !lastLeftBumper) {
+                // Auto-aim starts enabled. Tap Y to switch to/from manual aiming.
+                boolean manualAimButton = gamepad1.y;
+                if (manualAimButton && !lastManualAimButton) {
                     autoAimEnabled = !autoAimEnabled;
                 }
-                lastLeftBumper = currentLeftBumper;
+                lastManualAimButton = manualAimButton;
 
                 // START only redefines the current physical turret position as zero.
                 // It preserves whichever auto/manual mode the driver already selected.
@@ -285,7 +285,8 @@ public abstract class biobuzzTeleop extends LinearOpMode {
                         turretSubsystem.BANK_AIM_SWITCH_HYSTERESIS_IN,
                         turretSubsystem.BANK_AIM_SWITCH_HOLD_MS,
                         turret.getBankAimSwitchRemainingMs());
-                telemetry.addData("RGB Command", "position=%.3f, pulse=%.0f us",
+                telemetry.addData("RGB Command", outtakeToggle
+                                ? "position=%.3f, pulse=%.0f us" : "OFF (outtake disabled)",
                         turret.getIndicatorPosition(), turret.getIndicatorPulseUs());
                 double shooterDistanceIn = turret.getShooterDistanceIn();
                 telemetry.addData("Shooter Range",
@@ -433,11 +434,11 @@ public abstract class biobuzzTeleop extends LinearOpMode {
         telemetry.addLine("Left Stick: Drive/strafe | Right Stick X: Turn");
         telemetry.addLine("RT (tap): Toggle intake | RB (hold): Reverse intake");
         telemetry.addLine("LT (tap): Toggle flywheel | A (hold): Transfer forward | X (hold): Reverse transfer");
-        telemetry.addLine("LB (tap): Toggle auto/manual (starts AUTO)");
-        telemetry.addLine("D-pad L/R: Move turret while in manual mode");
+        telemetry.addLine("Y (tap): Toggle auto/manual aiming (starts AUTO)");
+        telemetry.addLine("D-pad L/R (hold): Move turret while in MANUAL");
         telemetry.addLine("START: set current turret position to 0 (mode unchanged)");
         telemetry.addLine("Keep a HIVE in camera view; right stick owns chassis turn");
         telemetry.addLine("A always feeds; Aim Ready is advisory only");
-        telemetry.addLine("LED: blue=manual, red=aligning, yellow=landmark/odometry lock, green=direct target lock");
+        telemetry.addLine("LED: off with outtake; blue=manual, red=aligning, yellow=assisted lock, green=target lock");
     }
 }

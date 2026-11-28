@@ -43,6 +43,8 @@ public class Hardware {
     private VoltageSensor batterySensor;
     private boolean manualBulk;
     private boolean odoLean;
+    /** Shooter owns whether its status light may be on; turret owns the color. */
+    private boolean shooterIndicatorEnabled;
     private int odoFirmware = -1;
     private final StringBuilder odoReport = new StringBuilder();
 
@@ -100,6 +102,7 @@ public class Hardware {
         // made low position values (especially red) fall into the OFF region.
         shooterLed.setPwmRange(new PwmControl.PwmRange(
                 SHOOTER_LED_PWM_MIN_US, SHOOTER_LED_PWM_MAX_US));
+        setShooterIndicatorEnabled(false);
 
         for (VoltageSensor sensor : hwMap.voltageSensor) {
             batterySensor = sensor;
@@ -115,6 +118,20 @@ public class Hardware {
         } catch (Throwable t) {
             odoReport.append("ODO_CONFIG_EXCEPTION ").append(t).append('\n');
         }
+    }
+
+    public void setShooterIndicatorEnabled(boolean enabled) {
+        shooterIndicatorEnabled = enabled;
+        if (enabled) {
+            if (!shooterLed.isPwmEnabled()) shooterLed.setPwmEnable();
+        } else if (shooterLed.isPwmEnabled()) {
+            // PWM disable is the reliable OFF state for the goBILDA RGB indicator.
+            shooterLed.setPwmDisable();
+        }
+    }
+
+    public boolean isShooterIndicatorEnabled() {
+        return shooterIndicatorEnabled;
     }
 
     /**

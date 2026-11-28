@@ -27,7 +27,7 @@ public class shooterSubsystem {
             95, 115, 140, 180
     };
     public static final double[] SHOT_RPM = {
-            2875, 2900, 2900, 3100
+            2875, 2900, 2900, 3000
     };
 
     // Competition PIDF defaults (RUN_WITHOUT_ENCODER motor mode).
@@ -92,12 +92,14 @@ public class shooterSubsystem {
 
         this.robot = robot;
         robot.outtake.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
+        robot.setShooterIndicatorEnabled(false);
         stopFlywheel();
     }
 
     public void setShooterEnabled(boolean enabled) {
         if (this.enabled == enabled) return;
         this.enabled = enabled;
+        robot.setShooterIndicatorEnabled(enabled);
 
         if (!enabled) {
             commandedRpm = 0;
@@ -312,6 +314,7 @@ public class shooterSubsystem {
 
     public void stop() {
         enabled = false;
+        robot.setShooterIndicatorEnabled(false);
         commandedRpm = 0;
         readyLoops = 0;
         atSpeed = false;

@@ -5,6 +5,36 @@ This repository contains the public FTC SDK for the BIOBUZZ (2026-2027) competit
 ## Team documentation
 
 - [Odometry calibration](tools/ODOMETRY_CALIBRATION.md)
+- [Turret tracking, diagnosis, and shooter tuning](TURRET_SHOOTER_TUNING.md)
+
+### Current turret field tracking
+
+The turret remembers the selected HIVE as a field-space point, not as a fixed
+robot-relative angle. As the robot drives around or passes the HIVE, Pinpoint
+recalculates the bearing to that same point; passing to the opposite side should
+therefore produce an approximately 180-degree bearing change without a blind
+"add 180" command.
+
+The November 27 log exposed a bad saved point: the protected shooter range was
+stuck near `214 in` while current target-tag measurements were about `40-80 in`.
+Field fusion now uses the current selected target CELL range with its own
+multi-frame position checks. Shooter RPM still uses only the protected,
+filtered range from the selected target CELL; helper tags and odometry cannot
+change RPM. Three agreeing range frames can also reseed a stale RPM range.
+
+The shooter status light is PWM-disabled whenever the outtake is disabled. The
+shooter owns light on/off state, while the turret only selects the active color.
+
+| Field check | Expected result |
+|---|---|
+| Lock the target, then strafe `24 in` | Saved `fus_x/fus_y` stays fixed; bearing changes toward the same point. |
+| Drive toward and then past the saved HIVE point | `fus_dist_in` decreases then increases; bearing reverses by about `180 deg`. |
+| Cross the field midpoint | No forced turn occurs merely at midfield; the turn follows the saved HIVE position. |
+| Hide tags briefly while moving | State may use `ODOMETRY`; the saved point remains fixed and aim-ready expires without fresh vision. |
+| Show helper tags only | A learned helper may correct position, but shooter RPM distance does not change. |
+| Toggle the outtake off | Flywheel power becomes zero and the shooter light turns fully off. |
+
+See the turret/shooter tuning guide above for the full test and tuning tables.
 
 ## Welcome!
 This GitHub repository contains the source code that is used to build an Android app to control a *FIRST* Tech Challenge competition robot.  To use this SDK, download/clone the entire project to your local computer.

@@ -32,8 +32,8 @@ public class ManualTeleop extends LinearOpMode {
         ElapsedTime loopTimer = new ElapsedTime();
 
         stopMechanisms(robot, shooter);
-        robot.shooterLed.setPwmEnable();
         robot.shooterLed.setPosition(turretSubsystem.LED_MANUAL_POSITION);
+        robot.setShooterIndicatorEnabled(false);
         robot.enableManualBulkReads();
         telemetry.setMsTransmissionInterval(100);
 
@@ -196,6 +196,6 @@ public class ManualTeleop extends LinearOpMode {
         telemetry.addLine("RT (tap): Toggle intake | RB (hold): Reverse intake");
         telemetry.addLine("LT (tap): Toggle flywheel | A (hold): Transfer forward");
         telemetry.addLine("X (hold): Reverse transfer");
-        telemetry.addLine("LED: blue=manual turret mode");
+        telemetry.addLine("LED: off with shooter; blue while shooter is on");
     }
 }

@@ -244,7 +244,8 @@ public class turretTest extends LinearOpMode {
                 telemetry.addData("Turret Mode", autoAim ? "AUTO-AIM" : "MANUAL");
                 telemetry.addData("Aim Source", "%s (%s)",
                         turret.getTrackingState(), turret.getTrackingStateReason());
-                telemetry.addData("LED Command", "position=%.3f, pulse=%.0f us",
+                telemetry.addData("LED Command", shooter.isEnabled()
+                                ? "position=%.3f, pulse=%.0f us" : "OFF (outtake disabled)",
                         turret.getIndicatorPosition(), turret.getIndicatorPulseUs());
                 telemetry.addData("Turret Tune", turretSubsystem.TUNE_VERSION);
                 telemetry.addData("Selected Calibration", "%d/%d %s",

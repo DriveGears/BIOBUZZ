@@ -27,7 +27,7 @@ public class turretSubsystem {
     // ========================= VALUES TO CALIBRATE =========================
 
     /** Displayed by the test TeleOp so the deployed tuning profile is verifiable. */
-    public static final String TUNE_VERSION = "clean-v25-reachability";
+    public static final String TUNE_VERSION = "clean-v26-field-handoff";
 
     /** Limelight AprilTag pipeline number. */
     public static final int APRILTAG_PIPELINE = 1;
@@ -257,6 +257,9 @@ public class turretSubsystem {
     private static final double STATIONARY_DISTANCE_OUTLIER_IN = 12.0;
     /** Even at full drive speed, a larger frame-to-frame jump is a bad edge-tag reading. */
     private static final double MOVING_DISTANCE_OUTLIER_IN = 40.0;
+    /** A persistent new target-tag range replaces a stale protected RPM range. */
+    public static final int DISTANCE_RESEED_CONFIRM_FRAMES = 3;
+    public static final double DISTANCE_RESEED_MATCH_IN = 10.0;
     private static final double MAX_TARGET_RATE_DEG_PER_SEC = 60.0;
     private static final double EXTRA_LATENCY_MS = 10.0;
     private static final double ENCODER_HISTORY_MS = 400.0;
@@ -311,6 +314,8 @@ public class turretSubsystem {
     private int distanceHistoryCount;
     private double filteredTxDeg;
     private double filteredDistanceIn;
+    private double pendingDistanceIn = Double.NaN;
+    private int pendingDistanceFrames;
     private double rawDistanceIn = Double.NaN;
     private boolean distanceInitialized;
     private double lastTransferFeedMs = -1;
@@ -810,6 +815,10 @@ public class turretSubsystem {
                 String.valueOf(VELOCITY_PREDICTION_LOOKAHEAD_MS));
         m.put("turret.VELOCITY_PREDICTION_MAX_LEAD_DEG",
                 String.valueOf(VELOCITY_PREDICTION_MAX_LEAD_DEG));
+        m.put("turret.DISTANCE_RESEED_CONFIRM_FRAMES",
+                String.valueOf(DISTANCE_RESEED_CONFIRM_FRAMES));
+        m.put("turret.DISTANCE_RESEED_MATCH_IN",
+                String.valueOf(DISTANCE_RESEED_MATCH_IN));
         m.put("turret.ODOMETRY_FORWARD_SIGN", String.valueOf(ODOMETRY_FORWARD_SIGN));
         m.put("turret.ODOMETRY_LEFT_SIGN", String.valueOf(ODOMETRY_LEFT_SIGN));
         m.put("turret.ODOMETRY_HEADING_SIGN", String.valueOf(ODOMETRY_HEADING_SIGN));
@@ -853,6 +862,7 @@ public class turretSubsystem {
         r.put("tur_saturated", dbgSaturated);
         r.put("tur_current_a", lastCurrentA);
         r.put("batt_v", lastBatteryV);
+        r.put("tur_led_enabled", robot.isShooterIndicatorEnabled());
         r.put("tur_led_position", indicatorPosition);
 
         r.put("vis_visible", targetVisible);
@@ -887,6 +897,8 @@ public class turretSubsystem {
         r.put("vis_geometry_ok", clusterGeometryValid);
         r.put("vis_dist_raw_in", rawDistanceIn);
         r.put("vis_dist_in", filteredDistanceIn);
+        r.put("vis_dist_pending_in", pendingDistanceIn);
+        r.put("vis_dist_pending_frames", pendingDistanceFrames);
         r.put("vis_dist_frozen_for_shot", distanceFrozenAfterShot);
         r.put("vis_fused_range_disagreement_in", getRangeDisagreementIn());
         r.put("vis_target_age_ms", Math.min(getTargetAgeMs(), 99999));
@@ -1031,11 +1043,14 @@ public class turretSubsystem {
         // Robot-relative bearing = camera error + physical turret bearing.
         double bearingAtCaptureDeg = horizontalErrorDeg
                 + ticksAtCapture / (AIM_DIRECTION_SIGN * TICKS_PER_DEGREE);
-        // Only save a field point using the range that passed updateDistance's
-        // bounds, median, jump rejection, and shot-freeze checks. Using the raw
-        // cluster range here could anchor odometry far beyond the real hive.
-        double fusionDistanceIn = distanceInitialized ? filteredDistanceIn : Double.NaN;
-        bankAimCorrectionDeg = bankAimCorrectionForDistance(fusionDistanceIn);
+        // Field tracking and shooter RPM deliberately use different filtering.
+        // Fusion receives the current selected target-tag range, then applies its
+        // own field-space residual + multi-frame confirmation. Reusing the heavily
+        // protected RPM range here once left the anchor at 214 in while the live
+        // target was 40-80 in away, so crossing the hive did not turn the turret
+        // toward the same physical point. RPM still uses filteredDistanceIn only.
+        double fusionDistanceIn = rawDistanceIn;
+        bankAimCorrectionDeg = bankAimCorrectionForDistance(filteredDistanceIn);
         double calibratedBearingAtCaptureDeg = calibratedAimBearingDeg(bearingAtCaptureDeg)
                 + bankAimCorrectionDeg;
         dbgRawBearingDeg = bearingAtCaptureDeg;
@@ -1092,11 +1107,17 @@ public class turretSubsystem {
                     targetYDegrees, tagId, selectedClusterFirstId);
         }
         rawDistanceIn = measuredDistanceIn;
-        if (measuredDistanceIn <= 0 || measuredDistanceIn >= MAX_DISTANCE_IN) return;
+        if (measuredDistanceIn <= 0 || measuredDistanceIn >= MAX_DISTANCE_IN) {
+            clearDistancePending();
+            return;
+        }
 
         // Do not allow shot vibration or a ball crossing the image to change RPM.
         // The existing median history is preserved and resumes after the short hold.
-        if (distanceFrozenAfterShot) return;
+        if (distanceFrozenAfterShot) {
+            clearDistancePending();
+            return;
+        }
 
         // If vision was absent while the robot crossed the field, the old close
         // samples are no longer relevant. Re-seed from the newly reacquired CELL
@@ -1104,6 +1125,7 @@ public class turretSubsystem {
         if (targetAgeBeforeFrameMs > HOLD_AFTER_TARGET_LOSS_MS) {
             distanceHistoryCount = 0;
             distanceInitialized = false;
+            clearDistancePending();
         }
 
         // Reject a bad pose/vertical-angle result before it contaminates the median history.
@@ -1113,8 +1135,34 @@ public class turretSubsystem {
                 ? STATIONARY_DISTANCE_OUTLIER_IN : MOVING_DISTANCE_OUTLIER_IN;
         if (distanceInitialized
                 && Math.abs(measuredDistanceIn - filteredDistanceIn) > distanceOutlierLimitIn) {
+            boolean matchesPending = Double.isFinite(pendingDistanceIn)
+                    && Math.abs(measuredDistanceIn - pendingDistanceIn)
+                    <= Math.max(0, DISTANCE_RESEED_MATCH_IN);
+            if (!matchesPending) {
+                pendingDistanceIn = measuredDistanceIn;
+                pendingDistanceFrames = 1;
+            } else {
+                pendingDistanceFrames++;
+                double gain = 1.0 / pendingDistanceFrames;
+                pendingDistanceIn += gain * (measuredDistanceIn - pendingDistanceIn);
+            }
+            if (pendingDistanceFrames < Math.max(1, DISTANCE_RESEED_CONFIRM_FRAMES)) {
+                return;
+            }
+
+            double previousDistanceIn = filteredDistanceIn;
+            filteredDistanceIn = pendingDistanceIn;
+            distanceHistoryCount = 1;
+            distanceHistory[0] = filteredDistanceIn;
+            distanceInitialized = true;
+            clearDistancePending();
+            event(String.format(java.util.Locale.US,
+                    "DISTANCE_RESEED_CONFIRMED old=%.1f new=%.1f",
+                    previousDistanceIn, filteredDistanceIn));
             return;
         }
+
+        clearDistancePending();
 
         double medianDistance = addAndMedian(
                 distanceHistory, distanceHistoryCount, measuredDistanceIn);
@@ -1127,6 +1175,11 @@ public class turretSubsystem {
             filteredDistanceIn += DISTANCE_FILTER_ALPHA
                     * (medianDistance - filteredDistanceIn);
         }
+    }
+
+    private void clearDistancePending() {
+        pendingDistanceIn = Double.NaN;
+        pendingDistanceFrames = 0;
     }
 
     /** Reads and owns the odometry state used by turret prediction/tracking. */
@@ -1623,13 +1676,17 @@ public class turretSubsystem {
     }
 
     private void writeIndicatorPosition(double position) {
+        indicatorPosition = position;
+        if (!robot.isShooterIndicatorEnabled()) {
+            if (robot.shooterLed.isPwmEnabled()) robot.shooterLed.setPwmDisable();
+            return;
+        }
         boolean pwmEnabled = robot.shooterLed.isPwmEnabled();
         if (pwmEnabled
                 && Double.isFinite(indicatorPosition)
-                && Math.abs(position - indicatorPosition) < LED_MIN_POSITION_CHANGE) {
+                && Math.abs(position - robot.shooterLed.getPosition()) < LED_MIN_POSITION_CHANGE) {
             return;
         }
-        indicatorPosition = position;
         if (!pwmEnabled) robot.shooterLed.setPwmEnable();
         robot.shooterLed.setPosition(position);
     }
@@ -2319,6 +2376,7 @@ public class turretSubsystem {
         txHistoryCount = 0;
         distanceHistoryCount = 0;
         distanceInitialized = false;
+        clearDistancePending();
         rawDistanceIn = Double.NaN;
         lastRobotBearingDeg = Double.NaN;
         if (!preserveFieldTarget) {
